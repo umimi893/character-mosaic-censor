@@ -3,7 +3,7 @@ from __future__ import annotations
 from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QCheckBox, QWidget
 
-from ..output_paths import default_output_for_input
+from ..output_paths import default_output_for_input, output_differs_from_default
 from .settings_safety import EnhancedControlPanel
 
 
@@ -83,7 +83,17 @@ class OutputFollowControlPanel(EnhancedControlPanel):
 
     def load_settings(self, settings: QSettings) -> None:
         super().load_settings(settings)
-        fixed = _as_bool(settings.value("paths/output_fixed", False))
+        raw_fixed = settings.value("paths/output_fixed", None)
+        if raw_fixed is None:
+            # Migration from v1.0.0 and older: preserve a previously customized
+            # output folder, but keep ordinary <input>/_censored values following.
+            fixed = output_differs_from_default(
+                self.input_edit.text(),
+                self.output_edit.text(),
+            )
+        else:
+            fixed = _as_bool(raw_fixed)
+
         self.output_fixed.blockSignals(True)
         self.output_fixed.setChecked(fixed)
         self.output_fixed.blockSignals(False)
