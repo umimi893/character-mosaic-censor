@@ -12,7 +12,9 @@ from dataclasses import replace
 from pathlib import Path
 
 from .anatomy_filter import AnatomyFilterConfig
+from .body_geometry import GeometryV2Detector
 from .body_reasoning import BodyReasoningDetector
+from .experience_recorder import record_process_experience
 from .i18n import t
 from .pipeline_config import PipelineConfig
 from .pipeline_logging import JsonlRunLogger, write_jsonl_log
@@ -24,23 +26,35 @@ from .pipeline_review import write_review_html
 class BatchProcessor(_BatchProcessor):
     """Batch processor with public UX/safety policy layers.
 
-    The default detector is wrapped by the final body-region reasoning layer.
-    Pelvis evidence protects close-contact scenes, while strong face/head,
-    knee/armpit, and torso/back evidence can remove obvious false positives.
+    The default detector is wrapped by body-region reasoning and geometry v2.
+    Geometry v2 adds pose-aligned torso/armpit/thigh/lower-leg suppression while
+    keeping a directional groin-positive region and multi-person fail-open rules.
     """
 
     def __init__(self, config: PipelineConfig | None = None, detector=None):
         super().__init__(config=config, detector=detector)
-        if detector is None and not isinstance(self.detector, BodyReasoningDetector):
-            self.detector = BodyReasoningDetector(
+        if detector is None and not isinstance(self.detector, GeometryV2Detector):
+            body = BodyReasoningDetector(
                 self.detector,
                 AnatomyFilterConfig(enabled=self.config.anatomy_filter),
             )
+            self.detector = GeometryV2Detector(body)
 
     def _reset_anatomy_diagnostics(self) -> None:
         reset = getattr(self.detector, "reset_filter_state", None)
         if callable(reset):
             reset()
+
+    def _record_learning(self, source, result):
+        if not getattr(self.config, "learning_enabled", True):
+            return result
+        try:
+            record_process_experience(Path(source), result)
+        except Exception:
+            # Learning is deliberately non-critical. A full disk, corrupt
+            # SQLite file, or crop encoder failure must never break censoring.
+            pass
+        return result
 
     def process_file(
         self,
@@ -54,7 +68,7 @@ class BatchProcessor(_BatchProcessor):
     ):
         self._reset_anatomy_diagnostics()
         if not self.config.review_only_over_count:
-            return super().process_file(
+            result = super().process_file(
                 source,
                 output,
                 review_copy,
@@ -63,6 +77,7 @@ class BatchProcessor(_BatchProcessor):
                 preview,
                 stop_requested,
             )
+            return self._record_learning(source, result)
 
         expected = self.config.expected_person_count
 
@@ -106,7 +121,7 @@ class BatchProcessor(_BatchProcessor):
             stop_requested,
         )
         if result.error or result.cancelled or result.skipped or result.fatal_error:
-            return result
+            return self._record_learning(source, result)
 
         over_detected = len(result.detections) > expected
         manual_bundle = _manual_review_bundle_paths(manual_review_copy)
@@ -118,8 +133,8 @@ class BatchProcessor(_BatchProcessor):
                 if result.output is not None and result.output.exists():
                     auto_path.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(result.output, auto_path)
-                return replace(result, manual_review_path=edit_path)
-            return result
+                result = replace(result, manual_review_path=edit_path)
+            return self._record_learning(source, result)
 
         # Re-running with overwrite enabled must also clean stale manual-review
         # artifacts when the latest result no longer needs them.
@@ -130,8 +145,8 @@ class BatchProcessor(_BatchProcessor):
             for path in (manual_review_copy, manual_review_annotated):
                 if path is not None:
                     path.unlink(missing_ok=True)
-            return replace(result, count_mismatch=False, manual_review_path=None)
-        return result
+            result = replace(result, count_mismatch=False, manual_review_path=None)
+        return self._record_learning(source, result)
 
 
 def _manual_review_bundle_paths(manual_review_copy: Path | None) -> tuple[Path, Path, Path] | None:
