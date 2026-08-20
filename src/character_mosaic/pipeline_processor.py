@@ -224,22 +224,27 @@ class BatchProcessor:
     def _analysis_snapshot(self):
         return getattr(self.detector, "last_filter_result", None)
 
-    @staticmethod
-    def _analysis_preview_fields(analysis) -> dict:
+    def _effective_analysis_status(self, analysis) -> str:
+        status = str(getattr(analysis, "status", "")) if analysis is not None else ""
+        disabled = tuple(sorted(str(item) for item in getattr(self.detector, "_disabled_components", set())))
+        if disabled and not status.startswith(("partial:", "partial_disabled:", "unavailable:", "failed:", "disabled_after_failure")):
+            return "partial_disabled:" + ",".join(disabled)
+        return status
+
+    def _analysis_preview_fields(self, analysis) -> dict:
         if analysis is None:
             return {}
         return {"body_regions": tuple(getattr(analysis, "body_regions", ())), "pose_points": tuple(getattr(analysis, "pose_points", ())),
                 "pose_edges": tuple(getattr(analysis, "pose_edges", ())), "candidate_evidence": tuple(getattr(analysis, "evidence", ())),
-                "analysis_status": str(getattr(analysis, "status", ""))}
+                "analysis_status": self._effective_analysis_status(analysis)}
 
-    @staticmethod
-    def _analysis_result_fields(analysis) -> dict:
+    def _analysis_result_fields(self, analysis) -> dict:
         if analysis is None:
             return {}
         suppressed = tuple(getattr(analysis, "suppressed", ()))
         return {"anatomy_suppressed": tuple(item.detection for item in suppressed),
                 "anatomy_suppression_reasons": tuple(item.log_reason for item in suppressed),
-                "anatomy_filter_status": str(getattr(analysis, "status", "")),
+                "anatomy_filter_status": self._effective_analysis_status(analysis),
                 "body_regions": tuple(getattr(analysis, "body_regions", ())), "pose_points": tuple(getattr(analysis, "pose_points", ())),
                 "pose_edges": tuple(getattr(analysis, "pose_edges", ())), "candidate_evidence": tuple(getattr(analysis, "evidence", ()))}
 
