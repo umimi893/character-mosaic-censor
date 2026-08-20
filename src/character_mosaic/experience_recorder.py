@@ -25,10 +25,13 @@ def record_process_experience(
     store: ExperienceStore | None = None,
     save_crops: bool = True,
 ) -> None:
-    """Persist one normal processing result as future learning experience.
+    """Persist the latest normal-processing evidence for one source image.
 
-    This function is intentionally best-effort at its call sites: learning must
-    never make normal censoring fail. Original source files are not copied.
+    Normal GUI reruns intentionally replace the previous candidate rows for the
+    same source. This prevents obsolete v1.4 decisions from remaining trusted
+    after the user changes thresholds/settings and processes the image again.
+    Learning is best-effort at its call sites and never controls output success.
+    Original source files are not copied.
     """
     source = Path(source)
     if not source.is_file() or result.error or result.cancelled or result.skipped:
@@ -38,9 +41,6 @@ def record_process_experience(
     stat = source.stat()
     source_key = f"file://{source.resolve()}"
     signature = f"{stat.st_size}:{stat.st_mtime_ns}:v{__version__}"
-    if store.source_seen(source_key, signature):
-        return
-
     digest = sha256_file(source)
     duplicate_of = store.duplicate_source_id(digest, excluding_key=source_key)
 
@@ -59,6 +59,12 @@ def record_process_experience(
         status="duplicate" if duplicate_of else "processed",
         duplicate_of=duplicate_of,
     )
+
+    # Replace, do not accumulate, evidence for the same normal-processing
+    # source. Mining keeps its resumable source_seen behavior independently.
+    with store.connect() as db:
+        db.execute("DELETE FROM candidates WHERE source_id=?", (source_id,))
+
     if duplicate_of:
         return
 
