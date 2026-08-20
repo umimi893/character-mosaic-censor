@@ -7,6 +7,9 @@ from ..output_paths import default_output_for_input, output_differs_from_default
 from .settings_safety import EnhancedControlPanel
 
 
+_OVERWRITE_DEFAULT_MIGRATION = "migrations/overwrite_default_v130"
+
+
 def _as_bool(value) -> bool:
     if isinstance(value, bool):
         return value
@@ -20,9 +23,10 @@ class OutputFollowControlPanel(EnhancedControlPanel):
     fixes it. Manually editing or browsing for an output folder automatically
     enables the fixed state.
 
-    The boolean state is deliberately independent from the checkbox widget so
-    virtual method calls made while Qt/base classes are still initializing can
-    never fail just because ``output_fixed`` has not been constructed yet.
+    GUI reruns default to overwriting existing generated results.  A one-time
+    v1.3 settings migration turns this on for installations that previously
+    persisted the old false default; after that, an explicit user choice is
+    preserved normally.
     """
 
     _output_fixed_state = False
@@ -34,6 +38,10 @@ class OutputFollowControlPanel(EnhancedControlPanel):
         settings: QSettings | None = None,
     ):
         super().__init__(language, parent, settings)
+
+        # Fresh GUI sessions should be immediately rerunnable even before a
+        # QSettings load has occurred.
+        self.overwrite.setChecked(True)
 
         self._output_fixed_state = False
         self.output_fixed = QCheckBox()
@@ -57,6 +65,12 @@ class OutputFollowControlPanel(EnhancedControlPanel):
                 "出力先を手入力または参照で選ぶと自動的に固定されます。",
                 "When off, changing the input folder automatically changes the output to <input>\\_censored. "
                 "Typing or browsing for an output folder automatically locks it.",
+            )
+        )
+        self.overwrite.setToolTip(
+            self._t(
+                "ONなら同じ画像をもう一度実行したとき、出力・Review・手動確認用データを最新結果へ更新します。ログは履歴として別ファイルに残ります。",
+                "When enabled, rerunning the same image refreshes output, Review, and manual-review data. Logs remain as separate history files.",
             )
         )
 
@@ -96,6 +110,7 @@ class OutputFollowControlPanel(EnhancedControlPanel):
     def save_settings(self, settings: QSettings) -> None:
         super().save_settings(settings)
         settings.setValue("paths/output_fixed", self._output_is_fixed())
+        settings.setValue(_OVERWRITE_DEFAULT_MIGRATION, True)
         settings.sync()
 
     def load_settings(self, settings: QSettings) -> None:
@@ -114,6 +129,22 @@ class OutputFollowControlPanel(EnhancedControlPanel):
         self._set_output_fixed_state(fixed)
         if not fixed:
             self._update_output_default(self.input_edit.text())
+
+        # Previous versions wrote overwrite=False to settings automatically even
+        # when the user never chose it.  Migrate that inherited default exactly
+        # once; subsequent explicit OFF choices are preserved.
+        if not _as_bool(settings.value(_OVERWRITE_DEFAULT_MIGRATION, False)):
+            self.overwrite.setChecked(True)
+            settings.setValue("options/overwrite", True)
+            settings.setValue(_OVERWRITE_DEFAULT_MIGRATION, True)
+            settings.sync()
+
+    def reset_defaults(self, checked: bool = False, *, confirm: bool = True) -> bool:
+        changed = super().reset_defaults(checked, confirm=confirm)
+        if changed:
+            self.overwrite.setChecked(True)
+            self.save_settings(self._settings_store)
+        return changed
 
     def set_running(self, running: bool) -> None:
         super().set_running(running)
