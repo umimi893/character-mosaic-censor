@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 from datetime import datetime
 from pathlib import Path
+from typing import Sequence
 
 from PySide6.QtCore import QObject, Signal, Slot
 
@@ -27,6 +28,7 @@ class BatchWorker(QObject):
         review_dir: Path | None,
         config: PipelineConfig,
         log_dir: Path,
+        images: Sequence[Path] | None = None,
     ):
         super().__init__()
         self.input_dir = input_dir
@@ -34,6 +36,7 @@ class BatchWorker(QObject):
         self.review_dir = review_dir
         self.config = config
         self.log_dir = log_dir
+        self.images = tuple(Path(path) for path in images) if images is not None else None
         self._stop = threading.Event()
 
     @Slot()
@@ -44,11 +47,16 @@ class BatchWorker(QObject):
         try:
             self.status.emit("ランタイム確認中")
             self.runtime_ready.emit(get_runtime_info())
-            self.status.emit("画像を走査中")
             processor = BatchProcessor(self.config)
-            images = processor.discover_images(self.input_dir, self.output_dir, self.review_dir)
-            self.discovered.emit(len(images))
 
+            if self.images is None:
+                self.status.emit("画像を走査中")
+                images = processor.discover_images(self.input_dir, self.output_dir, self.review_dir)
+            else:
+                self.status.emit("指定画像を準備中")
+                images = list(self.images)
+
+            self.discovered.emit(len(images))
             logger = JsonlRunLogger(log_path, self.config).open(total_images=len(images))
             self.log_ready.emit(str(log_path))
             if not images:
