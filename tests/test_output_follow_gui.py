@@ -22,6 +22,7 @@ def test_output_follow_panel_constructs_without_missing_widget(tmp_path):
 
     assert panel.output_fixed is not None
     assert panel._output_is_fixed() is False
+    assert panel.overwrite.isChecked() is True
     panel.close()
     app.processEvents()
 
@@ -44,4 +45,28 @@ def test_output_lock_survives_settings_roundtrip(tmp_path):
     assert second._output_is_fixed() is True
     assert second.output_edit.text() == str(tmp_path / "shared_output")
     second.close()
+    app.processEvents()
+
+
+def test_v130_migrates_old_automatic_overwrite_false_once(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    settings_path = tmp_path / "settings.ini"
+    old_settings = QSettings(str(settings_path), QSettings.Format.IniFormat)
+    old_settings.setValue("options/overwrite", False)
+    old_settings.sync()
+
+    panel = OutputFollowControlPanel(settings=old_settings)
+    panel.load_settings(old_settings)
+    assert panel.overwrite.isChecked() is True
+    panel.save_settings(old_settings)
+    panel.close()
+
+    # After migration, a deliberate OFF choice is respected.
+    current = QSettings(str(settings_path), QSettings.Format.IniFormat)
+    current.setValue("options/overwrite", False)
+    current.sync()
+    restored = OutputFollowControlPanel(settings=current)
+    restored.load_settings(current)
+    assert restored.overwrite.isChecked() is False
+    restored.close()
     app.processEvents()
