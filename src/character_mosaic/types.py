@@ -51,3 +51,6 @@ class ProcessResult:
     count_mismatch: bool = False
     manual_review_path: Path | None = None
     elapsed_seconds: float = 0.0
+    anatomy_suppressed: tuple[Detection, ...] = tuple()
+    anatomy_suppression_reasons: tuple[str, ...] = tuple()
+    anatomy_filter_status: str = ""
