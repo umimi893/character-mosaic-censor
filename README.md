@@ -106,9 +106,13 @@ Version 1.4 can immediately benefit from repeated high-confidence false-positive
 
 A candidate may be suppressed by Negative Memory only when:
 
-- several near-identical perceptual fingerprints already exist as **GOLD negative** experience,
-- the current candidate has no pelvis/groin-positive evidence,
+- several **distinct**, extremely close perceptual fingerprints already exist as **GOLD negative** experience,
+- the current candidate is associated with a reliable person,
+- the current candidate has no pelvis/groin-positive evidence and is not still close to a pelvis,
+- the base detector confidence is not extremely high,
 - the repeated evidence crosses a conservative match threshold.
+
+Exact repeated copies of one candidate fingerprint count as one visual memory, not many votes. A runtime-only suppression such as `review_without_pelvis` is stored as SILVER rather than automatically becoming GOLD.
 
 This mechanism is deliberately asymmetric. A memory-based suppression is **not** promoted back into GOLD training evidence, so one remembered mistake cannot recursively manufacture more trusted evidence and amplify itself.
 
@@ -126,7 +130,7 @@ The miner supports:
 - images stored inside ZIP files without manually extracting them,
 - exact SHA-256 duplicate detection,
 - corrupt/unreadable image skipping,
-- minimum-size and extreme-size safety checks,
+- minimum-size, pixel-count, file-size, and ZIP-member-size safety checks,
 - resumable processing through the Experience Store,
 - optional compact candidate-crop storage,
 - optional waiting until NVIDIA GPU utilization falls below a selected threshold,
@@ -138,8 +142,8 @@ Source images and ZIP archives are never modified by the miner.
 
 The miner deliberately does not force every candidate into a training label.
 
-- **GOLD negative** — a known hard-negative body/face reason has strong evidence.
-- **SILVER** — useful but less trustworthy evidence.
+- **GOLD negative** — an explicit, independently strong hard-negative body/face reason (for example back/torso/armpit/leg geometry or confirmed eye+face+head overlap).
+- **SILVER** — useful but less trustworthy evidence, including runtime suppressions that are not strong enough to seed trusted memory.
 - **QUARANTINE** — conflicting or ambiguous evidence; stored for analysis but not treated as trusted training data.
 
 This matters for noisy legacy libraries containing broken anatomy, text overlays, failed generations, or unusual compositions. Having many images makes it preferable to discard ambiguity rather than pretend an uncertain automatic label is ground truth.
@@ -236,23 +240,17 @@ run_cli.bat "D:\input" "D:\output" --review "D:\review"
 
 The output argument can be omitted to use `<input>\_censored`.
 
-Installed entry points:
+Corpus mining works immediately in the normal local `.venv` without reinstalling the project package:
 
-```text
-character-mosaic --help
-character-mosaic --version
-character-mosaic-gui
-character-mosaic-mine "F:\old_images" "D:\archives"
+```bat
+run_miner.bat "F:\old_images" "D:\archives"
+run_miner.bat "F:\old_images" --max-gpu-util 20
+run_miner.bat "F:\old_images" --no-idle-wait
+run_miner.bat "F:\old_images" --max-images 5000
+run_miner.bat "F:\old_images" --no-zip
 ```
 
-Useful miner options:
-
-```text
-character-mosaic-mine "F:\old_images" --max-gpu-util 20
-character-mosaic-mine "F:\old_images" --no-idle-wait
-character-mosaic-mine "F:\old_images" --max-images 5000
-character-mosaic-mine "F:\old_images" --no-zip
-```
+`--max-images` is a total limit across all supplied roots. If the project is installed as a Python package, the equivalent console entry point is `character-mosaic-mine`.
 
 ## Privacy
 
@@ -265,7 +263,7 @@ python -m pytest -q
 python -m compileall -q src diagnose.py run_cli.py run_gui.py
 ```
 
-`test_local.bat` runs the local regression suite on Windows. GitHub Actions are not required for normal use.
+`test_local.bat` runs the local regression suite on Windows. GitHub Actions are intentionally not required for normal use.
 
 ## Project structure
 
