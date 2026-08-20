@@ -2,6 +2,13 @@ from __future__ import annotations
 
 
 def main() -> int:
+    # pythonw.exe on Windows can expose stdout/stderr as None. Third-party
+    # inference/progress libraries may write to those streams, so provide safe
+    # null-device replacements before importing or running the GUI stack.
+    from .runtime_streams import ensure_standard_streams
+
+    ensure_standard_streams()
+
     # Import lazily so CLI/core users do not need Qt modules merely to import
     # character_mosaic.gui during tooling or tests.
     try:
