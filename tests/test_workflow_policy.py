@@ -80,11 +80,13 @@ def test_no_target_can_still_be_opted_into_review(tmp_path: Path):
     assert review.exists()
 
 
-def test_excess_detections_are_quarantined(tmp_path: Path):
+def test_excess_detections_create_edit_reference_and_auto_bundle(tmp_path: Path):
     input_dir = tmp_path / "input"
     output_dir = tmp_path / "output"
     input_dir.mkdir()
-    Image.new("RGB", (100, 100), "white").save(input_dir / "a.png")
+    source = input_dir / "a.png"
+    Image.new("RGB", (100, 100), (90, 120, 160)).save(source)
+    source_bytes = source.read_bytes()
     detections = [
         Detection((10, 10, 30, 30), "pussy", 0.9),
         Detection((60, 60, 80, 80), "pussy", 0.8),
@@ -93,9 +95,48 @@ def test_excess_detections_are_quarantined(tmp_path: Path):
 
     result = BatchProcessor(cfg, detector=FakeDetector(detections)).process_folder(input_dir, output_dir)[0]
 
+    edit = output_dir / "_manual_review" / "edit" / "a.png"
+    reference = output_dir / "_manual_review" / "reference_bbox" / "a.png"
+    auto = output_dir / "_manual_review" / "auto_censored" / "a.png"
     assert result.count_mismatch is True
-    assert result.manual_review_path == output_dir / "_manual_review" / "original" / "a.png"
-    assert result.manual_review_path.exists()
+    assert result.manual_review_path == edit
+    assert edit.read_bytes() == source_bytes
+    assert reference.exists()
+    assert auto.exists()
+    assert not (output_dir / "_manual_review" / "original" / "a.png").exists()
+    assert not (output_dir / "_manual_review" / "annotated" / "a.png").exists()
+
+
+def test_successful_rerun_removes_stale_manual_bundle(tmp_path: Path):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    Image.new("RGB", (100, 100), (90, 120, 160)).save(input_dir / "a.png")
+    over = [
+        Detection((10, 10, 30, 30), "pussy", 0.9),
+        Detection((60, 60, 80, 80), "pussy", 0.8),
+    ]
+    cfg = PipelineConfig(expected_person_count=1, review_only_over_count=True)
+    BatchProcessor(cfg, detector=FakeDetector(over)).process_folder(input_dir, output_dir)
+
+    bundle = [
+        output_dir / "_manual_review" / "edit" / "a.png",
+        output_dir / "_manual_review" / "reference_bbox" / "a.png",
+        output_dir / "_manual_review" / "auto_censored" / "a.png",
+    ]
+    assert all(path.exists() for path in bundle)
+
+    matching = [Detection((20, 20, 40, 40), "pussy", 0.9)]
+    rerun_cfg = PipelineConfig(
+        expected_person_count=1,
+        review_only_over_count=True,
+        overwrite=True,
+    )
+    result = BatchProcessor(rerun_cfg, detector=FakeDetector(matching)).process_folder(input_dir, output_dir)[0]
+
+    assert result.count_mismatch is False
+    assert result.manual_review_path is None
+    assert all(not path.exists() for path in bundle)
 
 
 class _FakeDropEvent:

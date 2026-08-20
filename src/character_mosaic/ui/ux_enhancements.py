@@ -14,11 +14,34 @@ class EnhancedMainWindow(MainWindow):
         open_input = getattr(self.controls, "open_input_requested", None)
         if open_input is not None:
             open_input.connect(self.open_input)
+        self._relabel_manual_review_button()
+
+    def _on_language_changed(self, language: str) -> None:
+        super()._on_language_changed(language)
+        self._relabel_manual_review_button()
+
+    def _relabel_manual_review_button(self) -> None:
+        button = getattr(self.controls, "open_manual_review_button", None)
+        if button is None:
+            return
+        button.setText(self._t("手動修正用画像を開く", "Open images for manual correction"))
+        button.setToolTip(
+            self._t(
+                "BBoxもモザイクも入っていない元画像を開きます。reference_bboxは検出位置確認用、auto_censoredは自動処理結果の比較用です。",
+                "Opens untouched originals with no BBox or censoring. reference_bbox is for detector reference and auto_censored is for comparison.",
+            )
+        )
 
     def open_input(self) -> None:
         text = self.controls.input_edit.text().strip()
         if text:
             self._open_local_path(Path(text))
+
+    def open_manual_review(self) -> None:
+        self.controls.ensure_output_default()
+        text = self.controls.output_edit.text().strip()
+        if text:
+            self._open_local_path(Path(text) / "_manual_review" / "edit")
 
     def _on_progress(self, index: int, total: int, src: str, result: ProcessResult) -> None:
         self.progress.setRange(0, max(1, total))
