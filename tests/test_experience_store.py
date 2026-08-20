@@ -24,6 +24,24 @@ def _negative_evidence(box=(10, 10, 30, 30)):
     )
 
 
+def _seed_gold_negatives(store, image, detection, count=8):
+    # Match candidate_crop(..., context_ratio=1.8) for the uniform test image.
+    crop = image.crop((11, 11, 49, 49))
+    fingerprint = candidate_fingerprint(crop)
+    for index in range(count):
+        source_id = store.upsert_source(
+            source_key=f"file://neg{index}.png", container_path=f"neg{index}.png", member_path=None,
+            signature="1", sha256=f"hash{index}", size_bytes=100, width=80, height=80,
+            status="processed",
+        )
+        neg = CandidateEvidence(detection=detection, decision="suppress", matched_persons=(0,))
+        store.record_candidate(
+            source_id, neg, pseudo_label="negative", quality_tier="gold", negative_kind="back",
+            suppression_reason="inside_upper_back", fingerprint=fingerprint,
+            crop_path=None, app_version="test",
+        )
+
+
 def test_fingerprint_is_stable_and_distance_zero():
     image = Image.new("RGB", (64, 64), (120, 90, 80))
     first = candidate_fingerprint(image)
@@ -73,22 +91,13 @@ def test_repeated_gold_negative_can_veto_unprotected_candidate(tmp_path):
     store = ExperienceStore(tmp_path / "experience.sqlite3")
     image = Image.new("RGB", (80, 80), (180, 160, 150))
     detection = Detection((20, 20, 40, 40), "pussy", 0.4, "full")
-    evidence = CandidateEvidence(detection=detection, decision="keep", matched_persons=(0,))
-    crop = image.crop((11, 11, 49, 49))
-    fingerprint = candidate_fingerprint(crop)
-
-    for index in range(3):
-        source_id = store.upsert_source(
-            source_key=f"file://neg{index}.png", container_path=f"neg{index}.png", member_path=None,
-            signature="1", sha256=f"hash{index}", size_bytes=100, width=80, height=80,
-            status="processed",
-        )
-        neg = CandidateEvidence(detection=detection, decision="suppress", matched_persons=(0,))
-        store.record_candidate(
-            source_id, neg, pseudo_label="negative", quality_tier="gold", negative_kind="back",
-            suppression_reason="inside_upper_back", fingerprint=fingerprint,
-            crop_path=None, app_version="test",
-        )
+    evidence = CandidateEvidence(
+        detection=detection,
+        decision="keep",
+        matched_persons=(0,),
+        pelvis_distance_ratio=1.0,
+    )
+    _seed_gold_negatives(store, image, detection, count=5)
 
     result = AnatomyFilterResult(kept=(detection,), evidence=(evidence,), status="applied")
     final = apply_negative_memory(result, image, store)
@@ -96,15 +105,62 @@ def test_repeated_gold_negative_can_veto_unprotected_candidate(tmp_path):
     assert final.suppressed[0].reason == "known_negative_memory"
 
 
+def test_unmatched_candidate_disables_negative_memory(tmp_path):
+    store = ExperienceStore(tmp_path / "experience.sqlite3")
+    image = Image.new("RGB", (80, 80), (180, 160, 150))
+    detection = Detection((20, 20, 40, 40), "pussy", 0.3, "full")
+    _seed_gold_negatives(store, image, detection, count=10)
+    evidence = CandidateEvidence(
+        detection=detection,
+        decision="keep",
+        matched_persons=tuple(),
+        pelvis_distance_ratio=1.0,
+    )
+    final = apply_negative_memory(
+        AnatomyFilterResult(kept=(detection,), evidence=(evidence,), status="applied"), image, store
+    )
+    assert final.kept == (detection,)
+
+
+def test_high_confidence_candidate_disables_negative_memory(tmp_path):
+    store = ExperienceStore(tmp_path / "experience.sqlite3")
+    image = Image.new("RGB", (80, 80), (180, 160, 150))
+    detection = Detection((20, 20, 40, 40), "pussy", 0.9, "full")
+    _seed_gold_negatives(store, image, detection, count=10)
+    evidence = CandidateEvidence(
+        detection=detection, decision="keep", matched_persons=(0,), pelvis_distance_ratio=1.0
+    )
+    final = apply_negative_memory(
+        AnatomyFilterResult(kept=(detection,), evidence=(evidence,), status="applied"), image, store
+    )
+    assert final.kept == (detection,)
+
+
+def test_numeric_pelvis_proximity_disables_negative_memory(tmp_path):
+    store = ExperienceStore(tmp_path / "experience.sqlite3")
+    image = Image.new("RGB", (80, 80), (180, 160, 150))
+    detection = Detection((20, 20, 40, 40), "pussy", 0.3, "full")
+    _seed_gold_negatives(store, image, detection, count=10)
+    evidence = CandidateEvidence(
+        detection=detection, decision="keep", matched_persons=(0,), pelvis_distance_ratio=0.55
+    )
+    final = apply_negative_memory(
+        AnatomyFilterResult(kept=(detection,), evidence=(evidence,), status="applied"), image, store
+    )
+    assert final.kept == (detection,)
+
+
 def test_pelvis_signal_disables_negative_memory(tmp_path):
     store = ExperienceStore(tmp_path / "experience.sqlite3")
     image = Image.new("RGB", (80, 80), (180, 160, 150))
     detection = Detection((20, 20, 40, 40), "pussy", 0.4, "full")
+    _seed_gold_negatives(store, image, detection, count=10)
     protected = CandidateEvidence(
         detection=detection,
         decision="keep",
         positive_signals=("near_pelvis:p0:0.1",),
         matched_persons=(0,),
+        pelvis_distance_ratio=0.1,
     )
     result = AnatomyFilterResult(kept=(detection,), evidence=(protected,), status="applied")
     final = apply_negative_memory(result, image, store)
