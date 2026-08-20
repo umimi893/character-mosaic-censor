@@ -84,9 +84,13 @@ class AnatomyAwareDetector:
     def __init__(self, detector, config: AnatomyFilterConfig | None = None):
         self.detector = detector
         self.config = config or AnatomyFilterConfig()
+        self.reset_filter_state()
+
+    def reset_filter_state(self) -> None:
         self.last_filter_result = AnatomyFilterResult(tuple(), status="not_run")
 
     def detect(self, image: Image.Image, progress=None, stop_requested=None) -> list[Detection]:
+        self.reset_filter_state()
         detections = list(
             self.detector.detect(
                 image,
