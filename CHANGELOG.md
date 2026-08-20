@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.3.0
+
+Rerun workflow, single-image testing, and stronger body-region suppression.
+
+- Made GUI reruns overwrite existing generated outputs by default, including a one-time migration for older settings that silently persisted the former `overwrite=false` default.
+- Re-running the same source now refreshes output/Review/manual-review artifacts while keeping JSONL logs as separate history files.
+- Added drag-and-drop single-image processing directly on the preview area. A dropped image uses the normal detector, body analysis, logging, Review, and save pipeline instead of a separate test implementation.
+- When the output folder is not locked, a dropped image uses `<image folder>/_censored`; an explicitly locked output folder is respected.
+- Added a final body-reasoning layer that derives a conservative shoulder-to-hip torso/back BBox from reliable pose points.
+- Strong torso/back overlap can now suppress waist/back/torso false positives, while nearly-horizontal poses skip this axis-aligned check for safety.
+- Changed final body-analysis `REVIEW` decisions without pelvis evidence into `SUPPRESS`, reflecting real-use feedback that these boxes were reliable false positives.
+- Preserved cross-person pelvis protection: another character's reliable pelvis evidence still wins over face/head/torso overlap for close-contact and oral compositions.
+- Added a violet torso/back overlay and Japanese evidence labels in the Body analysis preview.
+- Added regression coverage for overwrite migration, stale Review/manual-review cleanup, preview image drops, torso/back suppression, horizontal-pose safety, and cross-person pelvis protection.
+
 ## 1.2.0
 
 Body-region reasoning and visual diagnostics.
