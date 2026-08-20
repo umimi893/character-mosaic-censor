@@ -14,6 +14,7 @@ def main() -> int:
     try:
         from .ui import main_window
         from .ui.output_follow import OutputFollowControlPanel
+        from .ui.preview_drop import DropPreviewWidget
         from .ui.theme import DARK_STYLE
         from .ui.ux_enhancements import EnhancedMainWindow
     except ImportError as exc:
@@ -21,11 +22,12 @@ def main() -> int:
             raise RuntimeError("PySide6 がありません。install.bat を実行してください。") from exc
         raise
 
-    # Keep the existing worker implementation intact and layer UX behavior over
-    # the stable window/panel classes. Replace the legacy partial stylesheet with
-    # a complete one so Windows light mode cannot leak white native backgrounds
-    # into the dark application UI.
+    # Keep the stable window implementation and layer public UX behavior over
+    # it.  Preview and control panel classes are replaced before MainWindow is
+    # instantiated, so the base constructor automatically receives the enhanced
+    # widgets.
     main_window.ControlPanel = OutputFollowControlPanel
+    main_window.PreviewWidget = DropPreviewWidget
     main_window.MainWindow = EnhancedMainWindow
     main_window._STYLE = DARK_STYLE
     return main_window.main()
