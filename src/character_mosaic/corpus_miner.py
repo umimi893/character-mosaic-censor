@@ -74,7 +74,11 @@ class CorpusMiner:
 
     @staticmethod
     def _build_detector():
-        base = AnimeCensorDetector(DetectorConfig())
+        # Mining is interested in false-positive candidates produced by normal
+        # passes. Expensive flip/rotation retries after *zero* detections add no
+        # hard-negative sample, so disable only that fallback while retaining
+        # large-image tiled detection.
+        base = AnimeCensorDetector(DetectorConfig(flip_tta=False))
         body = BodyReasoningDetector(base, AnatomyFilterConfig(enabled=True))
         return GeometryV2Detector(body)
 
