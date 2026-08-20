@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.4.0
+
+False-positive geometry v2 and persistent automatic learning memory.
+
+- Added pose-aligned hard-negative geometry for the false positives seen most often in real use: upper back/shoulder-blade area, torso, armpits, thighs, and lower legs.
+- Replaced the broad idea of “near the pelvis” with an additional directional groin-positive zone below the hip line, so lower-back/waist false positives are less likely to be protected just because they are close to the hips.
+- Kept geometry v2 fail-open when a candidate cannot be assigned to a reliable person, when matched people disagree, or when another person's pelvis protects a close-contact candidate.
+- Expanded Body analysis visualization with torso-v2, armpit, thigh, and lower-leg regions and human-readable evidence labels.
+- Added a persistent local SQLite Experience Store for candidate evidence. The desktop GUI remembers compact candidate crops/evidence by default without copying original images.
+- Added conservative pseudo-label tiers: strong known hard-negatives become GOLD, weaker evidence becomes SILVER, and conflicting/ambiguous examples go to QUARANTINE instead of being forced into training data.
+- Added resumable legacy-corpus mining for mixed PNG/JPEG/WebP folders and ZIP archives. Corrupt files, exact duplicates, previously processed material, and unsupported files are skipped automatically; source files/archives are never modified.
+- Added an idle-GPU gate for corpus mining, configurable from the GUI, so large legacy libraries can be processed opportunistically while the GPU is otherwise unused.
+- Added a standalone `character-mosaic-mine` CLI for unattended corpus mining.
+- Added conservative Negative Memory: repeated near-identical GOLD false positives can suppress an unprotected future candidate, while pelvis/groin-positive evidence disables this memory veto. Memory-generated suppressions are not promoted back into GOLD, preventing recursive self-reinforcement.
+- Kept core/CLI processing side-effect-free by default; automatic experience capture is enabled by default only in the desktop GUI and can be disabled there.
+- Disabled expensive flip/rotation retries for zero-result images during legacy-corpus mining, because they cannot contribute hard-negative candidates; normal production detection behavior is unchanged.
+- Added no mandatory ML dependency for v1.4. Semantic hair segmentation and a learned verifier remain optional future consumers of the accumulated Experience Store rather than destabilizing the current ONNX/PySide installation.
+- Added regression coverage for back/armpit/thigh/leg suppression, directional groin protection, unmatched/multi-person fail-open behavior, Experience Store deduplication, pseudo-label quarantine, Negative Memory protection, ZIP mining, corrupt-file handling, and resume behavior.
+
 ## 1.3.0
 
 Rerun workflow, single-image testing, and stronger body-region suppression.
