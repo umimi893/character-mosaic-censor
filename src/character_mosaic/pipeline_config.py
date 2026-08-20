@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from .detector import DetectorConfig
 
+
 @dataclass
 class PipelineConfig:
     language: str = "ja"
@@ -27,6 +28,7 @@ class PipelineConfig:
     model_iou_threshold: float = 0.70
     merge_iou_threshold: float = 0.45
     merge_ios_threshold: float = 0.70
+    anatomy_filter: bool = True
     review_enabled: bool = True
     copy_low_confidence_to_review: bool = True
     copy_no_detection_to_review: bool = False
