@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal, Slot
@@ -45,9 +46,19 @@ class CorpusMinerWorker(QObject):
         try:
             store = ExperienceStore(self.store_path) if self.store_path else ExperienceStore()
             miner = CorpusMiner(self.config, store=store)
+            total_limit = self.config.max_images
             for root in self.roots:
                 if self._stop.is_set():
                     break
+
+                if total_limit is not None:
+                    remaining = int(total_limit) - int(aggregate["processed"])
+                    if remaining <= 0:
+                        break
+                    miner.config = replace(self.config, max_images=remaining)
+                else:
+                    miner.config = self.config
+
                 self.root_started.emit(str(root))
                 self.status.emit(f"採掘中: {root}")
                 stats = miner.mine(
