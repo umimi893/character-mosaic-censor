@@ -1,16 +1,17 @@
 @echo off
+chcp 65001 >nul
 setlocal
 cd /d "%~dp0"
 if not exist .venv\Scripts\python.exe (
-  echo 先に install_gpu.bat または install.bat を実行してください。
+  echo Run install_gpu.bat or install.bat first.
   pause
   exit /b 1
 )
 .venv\Scripts\python.exe diagnose.py %*
 set DIAG_EXIT=%ERRORLEVEL%
 echo.
-echo モデル読み込みまで確認する場合:
+echo To test model loading:
 echo   diagnose.bat --model-test
-if not "%DIAG_EXIT%"=="0" echo 診断で問題が見つかりました。上のERROR/WARNINGを確認してください。
+if not "%DIAG_EXIT%"=="0" echo Diagnostics found a problem. Check the ERROR/WARNING above.
 pause
 exit /b %DIAG_EXIT%

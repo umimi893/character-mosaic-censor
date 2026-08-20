@@ -21,10 +21,12 @@ from PySide6.QtWidgets import (
 )
 
 from ..pipeline import PipelineConfig
+from ..i18n import normalize_language, t
 from .settings_dialog import SettingsDialog
 
 
 class ControlPanel(QScrollArea):
+    language_changed = Signal(str)
     start_requested = Signal()
     stop_requested = Signal()
     browse_input_requested = Signal()
@@ -32,10 +34,12 @@ class ControlPanel(QScrollArea):
     browse_review_requested = Signal()
     open_output_requested = Signal()
     open_review_requested = Signal()
+    open_manual_review_requested = Signal()
     open_logs_requested = Signal()
 
-    def __init__(self, parent: QWidget | None = None):
+    def __init__(self, language: str = "ja", parent: QWidget | None = None):
         super().__init__(parent)
+        self._language = normalize_language(language)
         self.setWidgetResizable(True)
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setMinimumWidth(350)
@@ -63,30 +67,40 @@ class ControlPanel(QScrollArea):
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(12)
 
-        title = QLabel("Character Mosaic Censor")
-        title.setObjectName("panelTitle")
-        subtitle = QLabel("ローカルAI 自動モザイク")
-        subtitle.setObjectName("panelSubtitle")
-        layout.addWidget(title)
-        layout.addWidget(subtitle)
+        self.title_label = QLabel("Character Mosaic Censor")
+        self.title_label.setObjectName("panelTitle")
+        self.subtitle_label = QLabel()
+        self.subtitle_label.setObjectName("panelSubtitle")
+        layout.addWidget(self.title_label)
+        layout.addWidget(self.subtitle_label)
 
-        io_group = QGroupBox("処理フォルダ")
-        io_layout = QVBoxLayout(io_group)
+        language_row = QHBoxLayout()
+        self.language_label = QLabel()
+        self.language_combo = QComboBox()
+        self.language_combo.addItem("日本語", "ja")
+        self.language_combo.addItem("English", "en")
+        language_row.addWidget(self.language_label)
+        language_row.addWidget(self.language_combo, 1)
+        layout.addLayout(language_row)
+
+        self.io_group = QGroupBox()
+        io_layout = QVBoxLayout(self.io_group)
         self.input_edit = QLineEdit()
         self.output_edit = QLineEdit()
         self.review_edit = QLineEdit()
         self.input_edit.setPlaceholderText("入力画像フォルダ")
         self.output_edit.setPlaceholderText("出力フォルダ")
         self.review_edit.setPlaceholderText("Reviewフォルダ")
-        input_row, self.input_browse = self._path_row("入力", self.input_edit, self.browse_input_requested.emit)
-        output_row, self.output_browse = self._path_row("出力", self.output_edit, self.browse_output_requested.emit)
-        review_row, self.review_browse = self._path_row("Review", self.review_edit, self._browse_review)
+        input_row, self.input_prefix, self.input_browse = self._path_row(self.input_edit, self.browse_input_requested.emit)
+        output_row, self.output_prefix, self.output_browse = self._path_row(self.output_edit, self.browse_output_requested.emit)
+        review_row, self.review_prefix, self.review_browse = self._path_row(self.review_edit, self._browse_review)
         io_layout.addLayout(input_row)
         io_layout.addLayout(output_row)
         io_layout.addLayout(review_row)
+        self.input_edit.textChanged.connect(self._update_output_default)
         self.output_edit.textChanged.connect(self._update_review_default)
         self.review_edit.textEdited.connect(self._mark_review_custom)
-        layout.addWidget(io_group)
+        layout.addWidget(self.io_group)
 
         buttons = QHBoxLayout()
         self.start_button = QPushButton("▶  実行")
@@ -102,8 +116,12 @@ class ControlPanel(QScrollArea):
         buttons.addWidget(self.stop_button, 1)
         layout.addLayout(buttons)
 
-        detect_group = QGroupBox("検出設定")
-        detect_form = QFormLayout(detect_group)
+        self.detect_group = QGroupBox()
+        self.detect_form = QFormLayout(self.detect_group)
+        self.person_count = QSpinBox()
+        self.person_count.setRange(1, 20)
+        self.person_count.setSuffix(" 人")
+        self.person_count.setValue(defaults.expected_person_count)
         self.confidence = QDoubleSpinBox()
         self.confidence.setRange(0.01, 0.95)
         self.confidence.setSingleStep(0.01)
@@ -122,14 +140,20 @@ class ControlPanel(QScrollArea):
         self.padding_px.setRange(0, 300)
         self.padding_px.setSuffix(" px")
         self.padding_px.setValue(defaults.padding_px)
-        detect_form.addRow("Confidence", self.confidence)
-        detect_form.addRow("Review threshold", self.review_threshold)
-        detect_form.addRow("Padding", self.padding_ratio)
-        detect_form.addRow("固定余白", self.padding_px)
-        layout.addWidget(detect_group)
+        self.person_count_label = QLabel()
+        self.confidence_label = QLabel()
+        self.review_threshold_label = QLabel()
+        self.padding_ratio_label = QLabel()
+        self.padding_px_label = QLabel()
+        self.detect_form.addRow(self.person_count_label, self.person_count)
+        self.detect_form.addRow(self.confidence_label, self.confidence)
+        self.detect_form.addRow(self.review_threshold_label, self.review_threshold)
+        self.detect_form.addRow(self.padding_ratio_label, self.padding_ratio)
+        self.detect_form.addRow(self.padding_px_label, self.padding_px)
+        layout.addWidget(self.detect_group)
 
-        mosaic_group = QGroupBox("モザイク設定")
-        mosaic_form = QFormLayout(mosaic_group)
+        self.mosaic_group = QGroupBox()
+        self.mosaic_form = QFormLayout(self.mosaic_group)
         self.mode = QComboBox()
         self.mode.addItem("Mosaic", "mosaic")
         self.mode.addItem("Blur", "blur")
@@ -137,15 +161,17 @@ class ControlPanel(QScrollArea):
         self.strength = QSpinBox()
         self.strength.setRange(2, 128)
         self.strength.setValue(defaults.block_size)
-        mosaic_form.addRow("Mode", self.mode)
-        mosaic_form.addRow("Strength", self.strength)
-        layout.addWidget(mosaic_group)
+        self.mode_label = QLabel()
+        self.strength_label = QLabel()
+        self.mosaic_form.addRow(self.mode_label, self.mode)
+        self.mosaic_form.addRow(self.strength_label, self.strength)
+        layout.addWidget(self.mosaic_group)
 
-        options_group = QGroupBox("見逃し対策")
-        options_layout = QVBoxLayout(options_group)
+        self.options_group = QGroupBox()
+        options_layout = QVBoxLayout(self.options_group)
         self.tile_detection = QCheckBox("タイル検出")
         self.tile_detection.setChecked(defaults.tile_large_images)
-        self.flip_tta = QCheckBox("左右反転TTA")
+        self.flip_tta = QCheckBox("未検出時に反転・回転で再検出")
         self.flip_tta.setChecked(defaults.flip_tta)
         self.review_save = QCheckBox("Review保存 + HTML一覧")
         self.review_save.setChecked(defaults.review_enabled)
@@ -159,15 +185,15 @@ class ControlPanel(QScrollArea):
         self.advanced_button = QPushButton("詳細設定…")
         self.advanced_button.clicked.connect(self._open_advanced)
         options_layout.addWidget(self.advanced_button)
-        layout.addWidget(options_group)
+        layout.addWidget(self.options_group)
 
-        runtime_group = QGroupBox("GPU / Runtime")
-        runtime_layout = QVBoxLayout(runtime_group)
+        self.runtime_group = QGroupBox("GPU / Runtime")
+        runtime_layout = QVBoxLayout(self.runtime_group)
         self.runtime_label = QLabel("実行開始時に確認します")
         self.runtime_label.setWordWrap(True)
         self.runtime_label.setObjectName("runtimeLabel")
         runtime_layout.addWidget(self.runtime_label)
-        layout.addWidget(runtime_group)
+        layout.addWidget(self.runtime_group)
 
         self.summary_label = QLabel("待機中")
         self.summary_label.setObjectName("summaryLabel")
@@ -185,12 +211,20 @@ class ControlPanel(QScrollArea):
         open_row.addWidget(self.open_review_button)
         open_row.addWidget(self.open_logs_button)
         layout.addLayout(open_row)
+        self.open_manual_review_button = QPushButton("人数不一致・誤検出候補を開く")
+        self.open_manual_review_button.clicked.connect(self.open_manual_review_requested.emit)
+        layout.addWidget(self.open_manual_review_button)
         layout.addStretch(1)
 
-    def _path_row(self, label: str, edit: QLineEdit, callback) -> tuple[QHBoxLayout, QPushButton]:
+        index = self.language_combo.findData(self._language)
+        self.language_combo.setCurrentIndex(max(0, index))
+        self.language_combo.currentIndexChanged.connect(self._on_language_changed)
+        self.retranslate()
+
+    def _path_row(self, edit: QLineEdit, callback) -> tuple[QHBoxLayout, QLabel, QPushButton]:
         row = QHBoxLayout()
         row.setSpacing(6)
-        prefix = QLabel(label)
+        prefix = QLabel()
         prefix.setFixedWidth(48)
         button = QPushButton("参照")
         button.setFixedWidth(54)
@@ -198,7 +232,82 @@ class ControlPanel(QScrollArea):
         row.addWidget(prefix)
         row.addWidget(edit, 1)
         row.addWidget(button)
-        return row, button
+        return row, prefix, button
+
+    def _t(self, ja: str, en: str) -> str:
+        return t(self._language, ja, en)
+
+    def language(self) -> str:
+        return self._language
+
+    def set_language(self, language: str) -> None:
+        language = normalize_language(language)
+        index = self.language_combo.findData(language)
+        if index >= 0 and index != self.language_combo.currentIndex():
+            self.language_combo.setCurrentIndex(index)
+            return
+        if language != self._language:
+            self._language = language
+        self.retranslate()
+
+    def _on_language_changed(self) -> None:
+        language = normalize_language(str(self.language_combo.currentData()))
+        if language == self._language:
+            return
+        self._language = language
+        self.retranslate()
+        self.language_changed.emit(language)
+
+    def retranslate(self) -> None:
+        self.subtitle_label.setText(self._t("ローカルAI 自動モザイク", "Local AI automatic censoring"))
+        self.language_label.setText(self._t("表示言語", "Language"))
+        self.io_group.setTitle(self._t("処理フォルダ", "Processing folders"))
+        self.input_prefix.setText(self._t("入力", "Input"))
+        self.output_prefix.setText(self._t("出力", "Output"))
+        self.review_prefix.setText("Review")
+        self.input_edit.setPlaceholderText(self._t("入力画像フォルダ", "Input image folder"))
+        self.output_edit.setPlaceholderText(self._t("出力フォルダ", "Output folder"))
+        self.review_edit.setPlaceholderText(self._t("Reviewフォルダ", "Review folder"))
+        for button in (self.input_browse, self.output_browse, self.review_browse):
+            button.setText(self._t("参照", "Browse"))
+
+        self.start_button.setText(self._t("▶  実行", "▶  Start"))
+        self.stop_button.setText(self._t("■  停止", "■  Stop"))
+        self.detect_group.setTitle(self._t("検出設定", "Detection"))
+        self.person_count.setSuffix(self._t(" 人", " person(s)"))
+        self.person_count_label.setText(self._t("画像内の人数", "People in each image"))
+        self.confidence_label.setText(self._t("最低検出信頼度", "Minimum confidence"))
+        self.review_threshold_label.setText(self._t("Review行きの境界", "Review threshold"))
+        self.padding_ratio_label.setText(self._t("範囲の拡張率", "Area expansion"))
+        self.padding_px_label.setText(self._t("固定追加余白", "Extra margin"))
+        self.person_count.setToolTip(self._t("検出数がこの人数と違う画像は手動確認へ隔離します。", "Images whose detection count differs from this value are quarantined for manual review."))
+        self.confidence.setToolTip(self._t("下げると見逃しは減りますが、誤検出が増えます。", "Lower values reduce misses but increase false positives."))
+
+        self.mosaic_group.setTitle(self._t("隠し方の設定", "Censor effect"))
+        self.mode.setItemText(0, self._t("モザイク", "Mosaic"))
+        self.mode.setItemText(1, self._t("ぼかし", "Blur"))
+        self.mode.setItemText(2, self._t("黒塗り", "Black"))
+        self.mode_label.setText(self._t("方式", "Method"))
+        self.strength_label.setText(self._t("強さ", "Strength"))
+
+        self.options_group.setTitle(self._t("見逃し・保存設定", "Recall and saving"))
+        self.tile_detection.setText(self._t("大きな画像を分割検出", "Tile large images"))
+        self.flip_tta.setText(self._t("未検出時に反転・回転で再検出", "Retry flips/rotations after zero detections"))
+        self.review_save.setText(self._t("低信頼度画像をReviewに保存", "Save low-confidence images to Review"))
+        self.recursive.setText(self._t("サブフォルダも処理", "Include subfolders"))
+        self.overwrite.setText(self._t("既存出力を上書き", "Overwrite existing outputs"))
+        self.advanced_button.setText(self._t("詳細設定…", "Advanced settings…"))
+        self.advanced_button.setToolTip(self._t("大きな画像の分割条件、重複検出の統合、画質を調整します。", "Configure large-image tiling, duplicate merging, and output quality."))
+
+        self.runtime_label.setToolTip(self._t("実行開始時にGPUとONNX Runtimeの状態を確認します。", "GPU and ONNX Runtime status is checked when processing starts."))
+        self.open_output_button.setText(self._t("出力を開く", "Open output"))
+        self.open_review_button.setText(self._t("Reviewを開く", "Open Review"))
+        self.open_logs_button.setText(self._t("ログを開く", "Open logs"))
+        self.open_manual_review_button.setText(self._t("人数不一致・誤検出候補を開く", "Open count mismatches / false-positive candidates"))
+        if self.runtime_label.text() in {"実行開始時に確認します", "Checked when processing starts"}:
+            self.runtime_label.setText(self._t("実行開始時に確認します", "Checked when processing starts"))
+        if self.summary_label.text() in {"待機中", "Ready"}:
+            self.summary_label.setText(self._t("待機中", "Ready"))
 
     def _browse_review(self) -> None:
         self._review_custom = True
@@ -206,6 +315,10 @@ class ControlPanel(QScrollArea):
 
     def _mark_review_custom(self, _text: str) -> None:
         self._review_custom = True
+
+    def _update_output_default(self, text: str) -> None:
+        if text.strip() and not self.output_edit.text().strip():
+            self.output_edit.setText(str(Path(text.strip()) / "_censored"))
 
     def _update_review_default(self, text: str) -> None:
         if self._review_custom or not text.strip():
@@ -221,7 +334,7 @@ class ControlPanel(QScrollArea):
 
     def _open_advanced(self) -> None:
         config = self.config()
-        dialog = SettingsDialog(config, self)
+        dialog = SettingsDialog(config, self._language, self)
         if dialog.exec():
             config = dialog.apply_to(config)
             self._advanced.update(
@@ -242,8 +355,10 @@ class ControlPanel(QScrollArea):
 
     def set_input_path(self, path: str) -> None:
         self.input_edit.setText(path)
-        if not self.output_edit.text().strip():
-            self.output_edit.setText(str(Path(path) / "_censored"))
+        self.ensure_output_default()
+
+    def ensure_output_default(self) -> None:
+        self._update_output_default(self.input_edit.text())
 
     def set_output_path(self, path: str) -> None:
         self.output_edit.setText(path)
@@ -265,6 +380,8 @@ class ControlPanel(QScrollArea):
 
     def config(self) -> PipelineConfig:
         return PipelineConfig(
+            language=self._language,
+            expected_person_count=self.person_count.value(),
             detection_threshold=self.confidence.value(),
             auto_threshold=self.review_threshold.value(),
             padding_px=self.padding_px.value(),
@@ -300,6 +417,7 @@ class ControlPanel(QScrollArea):
             self.input_edit,
             self.output_edit,
             self.review_edit,
+            self.person_count,
             self.confidence,
             self.review_threshold,
             self.padding_ratio,
@@ -325,11 +443,13 @@ class ControlPanel(QScrollArea):
         self.summary_label.setText(text)
 
     def save_settings(self, settings: QSettings) -> None:
+        settings.setValue("ui/language", self._language)
         settings.setValue("paths/input", self.input_edit.text())
         settings.setValue("paths/output", self.output_edit.text())
         settings.setValue("paths/review", self.review_edit.text())
         settings.setValue("paths/review_custom", self._review_custom)
         settings.setValue("detect/confidence", self.confidence.value())
+        settings.setValue("detect/person_count", self.person_count.value())
         settings.setValue("detect/review_threshold", self.review_threshold.value())
         settings.setValue("detect/padding_ratio", self.padding_ratio.value())
         settings.setValue("detect/padding_px", self.padding_px.value())
@@ -345,11 +465,13 @@ class ControlPanel(QScrollArea):
         settings.sync()
 
     def load_settings(self, settings: QSettings) -> None:
+        self.set_language(str(settings.value("ui/language", self._language)))
         self.input_edit.setText(str(settings.value("paths/input", "")))
         self.output_edit.setText(str(settings.value("paths/output", "")))
         self.review_edit.setText(str(settings.value("paths/review", "")))
         self._review_custom = _as_bool(settings.value("paths/review_custom", False))
         self.confidence.setValue(float(settings.value("detect/confidence", self.confidence.value())))
+        self.person_count.setValue(int(settings.value("detect/person_count", self.person_count.value())))
         self.review_threshold.setValue(float(settings.value("detect/review_threshold", self.review_threshold.value())))
         self.padding_ratio.setValue(int(settings.value("detect/padding_ratio", self.padding_ratio.value())))
         self.padding_px.setValue(int(settings.value("detect/padding_px", self.padding_px.value())))

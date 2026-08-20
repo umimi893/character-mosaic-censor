@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..i18n import normalize_language, t
 from ..types import Detection, PreviewFrame
 
 
@@ -29,8 +30,9 @@ class _CanvasState:
 
 
 class ImageCanvas(QWidget):
-    def __init__(self, parent: QWidget | None = None):
+    def __init__(self, language: str = "ja", parent: QWidget | None = None):
         super().__init__(parent)
+        self._language = normalize_language(language)
         self._state: _CanvasState | None = None
         self._show_boxes = True
         self.setMinimumSize(480, 360)
@@ -47,7 +49,11 @@ class ImageCanvas(QWidget):
         painter.fillRect(self.rect(), QColor("#090c11"))
         if self._state is None or self._state.image.isNull():
             painter.setPen(QColor("#73808f"))
-            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "処理を開始するとここに画像が表示されます")
+            painter.drawText(
+                self.rect(),
+                Qt.AlignmentFlag.AlignCenter,
+                t(self._language, "処理を開始するとここに画像が表示されます", "Images appear here after processing starts"),
+            )
             return
 
         image = self._state.image
@@ -73,7 +79,7 @@ class ImageCanvas(QWidget):
         censor_pen.setStyle(Qt.PenStyle.DashLine)
         painter.setPen(censor_pen)
         for box in self._state.censor_boxes:
-            painter.drawRect(self._map_box(box, left, top, box_scale_x, box_scale_y))
+            painter.drawEllipse(self._map_box(box, left, top, box_scale_x, box_scale_y))
 
         det_pen = QPen(QColor(58, 224, 139, 245))
         det_pen.setWidthF(max(2.0, 2.5 * min(1.5, scale)))
@@ -83,6 +89,10 @@ class ImageCanvas(QWidget):
             rect = self._map_box(det.box, left, top, box_scale_x, box_scale_y)
             painter.drawRect(rect)
             self._draw_label(painter, rect, f"{det.label} {det.score:.2f}")
+
+    def set_language(self, language: str) -> None:
+        self._language = normalize_language(language)
+        self.update()
 
     @staticmethod
     def _map_box(
@@ -113,8 +123,9 @@ class ImageCanvas(QWidget):
 class PreviewWidget(QWidget):
     """Large monitor showing original, detection and censored stages."""
 
-    def __init__(self, parent: QWidget | None = None):
+    def __init__(self, language: str = "ja", parent: QWidget | None = None):
         super().__init__(parent)
+        self._language = normalize_language(language)
         self._states: dict[str, _CanvasState | None] = {
             "original": None,
             "detected": None,
@@ -122,18 +133,18 @@ class PreviewWidget(QWidget):
         }
         self._current_mode = "original"
 
-        self.canvas = ImageCanvas(self)
-        self.file_label = QLabel("待機中")
+        self.canvas = ImageCanvas(self._language, self)
+        self.file_label = QLabel()
         self.file_label.setObjectName("previewFile")
-        self.status_label = QLabel("画像を選択して実行してください")
+        self.status_label = QLabel()
         self.status_label.setObjectName("previewStatus")
         self.status_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
 
-        self.original_btn = self._mode_button("元画像", "original")
-        self.detected_btn = self._mode_button("検出BBox", "detected")
-        self.censored_btn = self._mode_button("モザイク後", "censored")
+        self.original_btn = self._mode_button("", "original")
+        self.detected_btn = self._mode_button("", "detected")
+        self.censored_btn = self._mode_button("", "censored")
         self.original_btn.setChecked(True)
-        self.box_toggle = QCheckBox("BBox表示")
+        self.box_toggle = QCheckBox()
         self.box_toggle.setChecked(True)
         self.box_toggle.toggled.connect(self._refresh)
 
@@ -162,6 +173,21 @@ class PreviewWidget(QWidget):
         layout.addLayout(top)
         layout.addWidget(self.canvas, 1)
         layout.addLayout(info)
+        self.set_language(self._language)
+
+    def _t(self, ja: str, en: str) -> str:
+        return t(self._language, ja, en)
+
+    def set_language(self, language: str) -> None:
+        self._language = normalize_language(language)
+        self.canvas.set_language(self._language)
+        self.original_btn.setText(self._t("元画像", "Original"))
+        self.detected_btn.setText(self._t("検出範囲", "Detections"))
+        self.censored_btn.setText(self._t("処理後", "Censored"))
+        self.box_toggle.setText(self._t("検出範囲を表示", "Show detection areas"))
+        if not any(self._states.values()):
+            self.file_label.setText(self._t("待機中", "Ready"))
+            self.status_label.setText(self._t("入力フォルダを選んで実行してください", "Choose an input folder and start processing"))
 
     def _mode_button(self, text: str, mode: str) -> QPushButton:
         button = QPushButton(text)
@@ -200,8 +226,8 @@ class PreviewWidget(QWidget):
 
     def clear(self) -> None:
         self._states = {"original": None, "detected": None, "censored": None}
-        self.file_label.setText("待機中")
-        self.status_label.setText("画像を選択して実行してください")
+        self.file_label.setText(self._t("待機中", "Ready"))
+        self.status_label.setText(self._t("入力フォルダを選んで実行してください", "Choose an input folder and start processing"))
         self._activate_mode("original")
         self._refresh()
 

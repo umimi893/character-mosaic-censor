@@ -89,8 +89,8 @@ class AnimeCensorDetector(Detector):
     """Adapter around dghs-imgutils' anime censor detector.
 
     Recall is intentionally favored: a full-frame pass is combined with
-    overlapping tiles and optional horizontal-flip TTA. Cross-pass detections
-    are then *union-merged* instead of simply dropping lower-scoring boxes.
+    overlapping tiles, then zero-result images get flip/rotation retries.
+    Cross-pass detections are *union-merged* instead of simply dropping lower-scoring boxes.
     This keeps a wider alternate box from being lost, which is safer for
     censor coverage.
     """
@@ -122,15 +122,7 @@ class AnimeCensorDetector(Detector):
                 return False
             results.extend(self._run_one(detect_censors, pass_image, offset=offset, source=source, flipped=False))
             self._emit_progress(progress, source, results)
-            if should_stop():
-                return False
-            if self.config.flip_tta:
-                flip_source = f"{source}_flip"
-                results.extend(self._run_one(detect_censors, pass_image, offset=offset, source=flip_source, flipped=True))
-                self._emit_progress(progress, flip_source, results)
-                if should_stop():
-                    return False
-            return True
+            return not should_stop()
 
         if not run_pass(image, (0, 0), "full"):
             return self._filtered_merged(results, image.size)
@@ -142,6 +134,27 @@ class AnimeCensorDetector(Detector):
             for idx, (crop, offset) in enumerate(tiles, start=1):
                 if not run_pass(crop, offset, f"tile_{grid}x{grid}_{idx}of{total}"):
                     break
+
+        merged = self._filtered_merged(results, image.size)
+        if merged or not self.config.flip_tta or should_stop():
+            return merged
+
+        # Orientation fallback is intentionally expensive, so it is only used
+        # when the normal full-frame and tiled passes found no target at all.
+        for transform in ("hflip", "vflip", "rot90", "rot180", "rot270"):
+            if should_stop():
+                break
+            source = f"retry_{transform}"
+            results.extend(
+                self._run_one(
+                    detect_censors,
+                    image,
+                    offset=(0, 0),
+                    source=source,
+                    transform=transform,
+                )
+            )
+            self._emit_progress(progress, source, results)
 
         return self._filtered_merged(results, image.size)
 
@@ -174,9 +187,11 @@ class AnimeCensorDetector(Detector):
         image: Image.Image,
         offset: tuple[int, int],
         source: str,
-        flipped: bool,
+        flipped: bool = False,
+        transform: str | None = None,
     ) -> list[Detection]:
-        inference_image = ImageOps.mirror(image) if flipped else image
+        transform = transform or ("hflip" if flipped else "identity")
+        inference_image = _transform_image(image, transform)
         try:
             raw = fn(
                 inference_image,
@@ -188,12 +203,13 @@ class AnimeCensorDetector(Detector):
         except Exception as exc:
             raise RuntimeError(f"detect_censors 推論に失敗しました ({source}): {exc}") from exc
         ox, oy = offset
-        local_w = image.width
         out: list[Detection] = []
         for box, label, score in raw:
-            x0, y0, x1, y1 = [int(v) for v in box]
-            if flipped:
-                x0, x1 = local_w - x1, local_w - x0
+            x0, y0, x1, y1 = _map_box_from_transform(
+                tuple(int(v) for v in box),
+                image.size,
+                transform,
+            )
             if x1 <= x0 or y1 <= y0:
                 continue
             out.append(
@@ -205,6 +221,45 @@ class AnimeCensorDetector(Detector):
                 )
             )
         return out
+
+
+def _transform_image(image: Image.Image, transform: str) -> Image.Image:
+    if transform == "identity":
+        return image
+    if transform == "hflip":
+        return ImageOps.mirror(image)
+    if transform == "vflip":
+        return ImageOps.flip(image)
+    if transform == "rot90":
+        return image.transpose(Image.Transpose.ROTATE_90)
+    if transform == "rot180":
+        return image.transpose(Image.Transpose.ROTATE_180)
+    if transform == "rot270":
+        return image.transpose(Image.Transpose.ROTATE_270)
+    raise ValueError(f"unknown detector transform: {transform}")
+
+
+def _map_box_from_transform(
+    box: tuple[int, int, int, int],
+    original_size: tuple[int, int],
+    transform: str,
+) -> tuple[int, int, int, int]:
+    """Map a box from a transformed image back to the original coordinates."""
+    x0, y0, x1, y1 = box
+    width, height = original_size
+    if transform == "identity":
+        return box
+    if transform == "hflip":
+        return width - x1, y0, width - x0, y1
+    if transform == "vflip":
+        return x0, height - y1, x1, height - y0
+    if transform == "rot90":
+        return width - y1, x0, width - y0, x1
+    if transform == "rot180":
+        return width - x1, height - y1, width - x0, height - y0
+    if transform == "rot270":
+        return y0, height - x1, y1, height - x0
+    raise ValueError(f"unknown detector transform: {transform}")
 
 
 def get_runtime_info() -> RuntimeInfo:

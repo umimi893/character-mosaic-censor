@@ -1,6 +1,13 @@
 from PIL import Image
 
-from character_mosaic.detector import AnimeCensorDetector, DetectorConfig, _deduplicate, _make_grid_tiles, _make_tiles
+from character_mosaic.detector import (
+    AnimeCensorDetector,
+    DetectorConfig,
+    _deduplicate,
+    _make_grid_tiles,
+    _make_tiles,
+    _map_box_from_transform,
+)
 from character_mosaic.types import Detection
 
 
@@ -46,6 +53,43 @@ def test_flip_tta_box_is_mapped_back_to_original_coordinates():
     out = detector._run_one(fake_detect, image, offset=(5, 7), source="test_flip", flipped=True)
     assert out[0].box == (75, 27, 95, 57)
     assert out[0].source == "test_flip"
+
+
+def test_rotation_boxes_are_mapped_back_to_original_coordinates():
+    size = (100, 80)
+    assert _map_box_from_transform((10, 20, 30, 50), size, "rot90") == (50, 10, 80, 30)
+    assert _map_box_from_transform((10, 20, 30, 50), size, "rot180") == (70, 30, 90, 60)
+    assert _map_box_from_transform((10, 20, 30, 50), size, "rot270") == (20, 50, 50, 70)
+
+
+def test_orientation_retries_run_only_after_zero_normal_detections(monkeypatch):
+    calls = []
+
+    def fake_detect(image, **_kwargs):
+        calls.append(image.size)
+        if len(calls) == 2:
+            return [((10, 20, 30, 50), "pussy", 0.8)]
+        return []
+
+    monkeypatch.setattr("imgutils.detect.detect_censors", fake_detect)
+    detector = AnimeCensorDetector(DetectorConfig(tile_large_images=False, flip_tta=True))
+    out = detector.detect(Image.new("RGB", (100, 80), "white"))
+    assert len(calls) == 6
+    assert out[0].box == (70, 20, 90, 50)
+    assert out[0].source == "retry_hflip"
+
+
+def test_orientation_retries_are_skipped_when_normal_detection_succeeds(monkeypatch):
+    calls = []
+
+    def fake_detect(image, **_kwargs):
+        calls.append(image.size)
+        return [((10, 20, 30, 50), "pussy", 0.8)]
+
+    monkeypatch.setattr("imgutils.detect.detect_censors", fake_detect)
+    detector = AnimeCensorDetector(DetectorConfig(tile_large_images=False, flip_tta=True))
+    detector.detect(Image.new("RGB", (100, 80), "white"))
+    assert len(calls) == 1
 
 
 def test_merge_detections_unions_wider_lower_score_box():

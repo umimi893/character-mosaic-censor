@@ -97,6 +97,58 @@ def test_subfolder_structure_is_preserved(tmp_path: Path):
     assert (output_dir / "a" / "b" / "x.png").exists()
 
 
+def test_detection_count_mismatch_is_isolated_with_original_and_annotation(tmp_path: Path):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    source = input_dir / "a.png"
+    Image.new("RGB", (100, 100), (80, 120, 160)).save(source)
+    detections = [
+        Detection((10, 10, 30, 30), "pussy", 0.8),
+        Detection((60, 60, 80, 80), "pussy", 0.7),
+    ]
+    processor = BatchProcessor(PipelineConfig(expected_person_count=1), detector=FakeDetector(detections))
+
+    result = processor.process_folder(input_dir, output_dir)[0]
+
+    original = output_dir / "_manual_review" / "original" / "a.png"
+    annotated = output_dir / "_manual_review" / "annotated" / "a.png"
+    assert result.count_mismatch is True
+    assert result.manual_review_path == original
+    assert original.read_bytes() == source.read_bytes()
+    assert annotated.exists()
+
+
+def test_matching_detection_count_is_not_put_in_manual_review(tmp_path: Path):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    Image.new("RGB", (100, 100), "white").save(input_dir / "a.png")
+    detection = Detection((40, 40, 60, 60), "pussy", 0.8)
+
+    result = BatchProcessor(
+        PipelineConfig(expected_person_count=1), detector=FakeDetector([detection])
+    ).process_folder(input_dir, output_dir)[0]
+
+    assert result.count_mismatch is False
+    assert result.manual_review_path is None
+    assert not (output_dir / "_manual_review").exists()
+
+
+def test_zero_detection_is_a_count_mismatch_after_detector_retries(tmp_path: Path):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    Image.new("RGB", (100, 100), "white").save(input_dir / "a.png")
+
+    result = BatchProcessor(
+        PipelineConfig(expected_person_count=1), detector=FakeDetector([])
+    ).process_folder(input_dir, output_dir)[0]
+
+    assert result.count_mismatch is True
+    assert result.manual_review_path == output_dir / "_manual_review" / "original" / "a.png"
+
+
 def test_review_html_lists_review_images(tmp_path: Path):
     review_dir = tmp_path / "review"
     review_dir.mkdir()

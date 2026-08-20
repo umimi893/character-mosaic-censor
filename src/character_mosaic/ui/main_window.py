@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..detector import RuntimeInfo
+from ..i18n import normalize_language, t
 from ..pipeline import validate_processing_paths
 from ..types import PreviewFrame, ProcessResult
 from ..workers.batch_worker import BatchWorker
@@ -33,10 +34,11 @@ class MainWindow(QMainWindow):
         self._worker: BatchWorker | None = None
         self._pending_close = False
         self._settings = QSettings("CharacterMosaicCensor", "CharacterMosaicCensor")
+        self._language = normalize_language(str(self._settings.value("ui/language", "ja")))
         self._last_log_path: Path | None = None
 
-        self.preview = PreviewWidget()
-        self.controls = ControlPanel()
+        self.preview = PreviewWidget(self._language)
+        self.controls = ControlPanel(self._language)
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
         splitter.addWidget(self.preview)
@@ -59,8 +61,9 @@ class MainWindow(QMainWindow):
         status.addWidget(self.detect_label, 1)
         status.addPermanentWidget(self.progress)
         self.setStatusBar(status)
-        self.statusBar().showMessage("待機中")
+        self.statusBar().showMessage(self._t("待機中", "Ready"))
 
+        self.controls.language_changed.connect(self._on_language_changed)
         self.controls.start_requested.connect(self.start_processing)
         self.controls.stop_requested.connect(self.stop_processing)
         self.controls.browse_input_requested.connect(self.choose_input)
@@ -68,9 +71,20 @@ class MainWindow(QMainWindow):
         self.controls.browse_review_requested.connect(self.choose_review)
         self.controls.open_output_requested.connect(self.open_output)
         self.controls.open_review_requested.connect(self.open_review)
+        self.controls.open_manual_review_requested.connect(self.open_manual_review)
         self.controls.open_logs_requested.connect(self.open_logs)
 
         self._restore_settings()
+
+    def _t(self, ja: str, en: str) -> str:
+        return t(self._language, ja, en)
+
+    def _on_language_changed(self, language: str) -> None:
+        self._language = normalize_language(language)
+        self.preview.set_language(self._language)
+        self._settings.setValue("ui/language", self._language)
+        self._settings.sync()
+        self.statusBar().showMessage(self._t("表示言語を日本語に変更しました", "Display language changed to English"))
 
     def _restore_settings(self) -> None:
         self.controls.load_settings(self._settings)
@@ -89,19 +103,19 @@ class MainWindow(QMainWindow):
 
     def choose_input(self) -> None:
         start = self.controls.input_edit.text().strip() or str(Path.home())
-        path = QFileDialog.getExistingDirectory(self, "入力フォルダ", start)
+        path = QFileDialog.getExistingDirectory(self, self._t("入力フォルダ", "Input folder"), start)
         if path:
             self.controls.set_input_path(path)
 
     def choose_output(self) -> None:
         start = self.controls.output_edit.text().strip() or self.controls.input_edit.text().strip() or str(Path.home())
-        path = QFileDialog.getExistingDirectory(self, "出力フォルダ", start)
+        path = QFileDialog.getExistingDirectory(self, self._t("出力フォルダ", "Output folder"), start)
         if path:
             self.controls.set_output_path(path)
 
     def choose_review(self) -> None:
         start = self.controls.review_edit.text().strip() or self.controls.output_edit.text().strip() or str(Path.home())
-        path = QFileDialog.getExistingDirectory(self, "Reviewフォルダ", start)
+        path = QFileDialog.getExistingDirectory(self, self._t("Reviewフォルダ", "Review folder"), start)
         if path:
             self.controls.set_review_path(path)
 
@@ -117,6 +131,12 @@ class MainWindow(QMainWindow):
             return
         index = review / "index.html"
         self._open_local_path(index if index.exists() else review)
+
+    def open_manual_review(self) -> None:
+        self.controls.ensure_output_default()
+        text = self.controls.output_edit.text().strip()
+        if text:
+            self._open_local_path(Path(text) / "_manual_review")
 
     def open_logs(self) -> None:
         if self._last_log_path is not None:
@@ -139,10 +159,19 @@ class MainWindow(QMainWindow):
         if self._thread is not None:
             return
         if not self.controls.input_edit.text().strip():
-            QMessageBox.critical(self, "設定エラー", "入力フォルダを指定してください。")
+            QMessageBox.critical(
+                self,
+                self._t("設定エラー", "Settings error"),
+                self._t("入力フォルダを指定してください。", "Choose an input folder."),
+            )
             return
+        self.controls.ensure_output_default()
         if not self.controls.output_edit.text().strip():
-            QMessageBox.critical(self, "設定エラー", "出力フォルダを指定してください。")
+            QMessageBox.critical(
+                self,
+                self._t("設定エラー", "Settings error"),
+                self._t("出力フォルダを指定してください。", "Choose an output folder."),
+            )
             return
 
         input_dir = self.controls.input_path()
@@ -154,18 +183,18 @@ class MainWindow(QMainWindow):
             config.validate()
             input_dir, output_dir, review_dir = validate_processing_paths(input_dir, output_dir, review_dir)
         except (ValueError, OSError) as exc:
-            QMessageBox.critical(self, "設定エラー", str(exc))
+            QMessageBox.critical(self, self._t("設定エラー", "Settings error"), str(exc))
             return
 
         self._save_settings()
         log_dir = output_dir.parent / "logs"
         self.preview.clear()
         self.controls.set_running(True)
-        self.controls.set_summary("処理中…")
+        self.controls.set_summary(self._t("処理中…", "Processing…"))
         self.progress.setRange(0, 0)  # indeterminate while scanning
-        self.counter_label.setText("走査中")
+        self.counter_label.setText(self._t("走査中", "Scanning"))
         self.detect_label.setText("Detected: -")
-        self.statusBar().showMessage("準備中")
+        self.statusBar().showMessage(self._t("準備中", "Preparing"))
 
         thread = QThread(self)
         worker = BatchWorker(input_dir, output_dir, review_dir, config, log_dir)
@@ -195,16 +224,19 @@ class MainWindow(QMainWindow):
             return
         self._worker.request_stop()
         self.controls.stop_button.setEnabled(False)
-        self.statusBar().showMessage("停止要求中 — 現在の推論パス終了後に停止します")
+        self.statusBar().showMessage(self._t(
+            "停止要求中 — 現在の推論パス終了後に停止します",
+            "Stop requested — processing will stop after the current inference pass",
+        ))
 
     def _on_discovered(self, total: int) -> None:
         self.progress.setRange(0, max(1, total))
         self.progress.setValue(0)
         self.counter_label.setText(f"0 / {total}")
         if total == 0:
-            self.statusBar().showMessage("処理対象画像がありません")
+            self.statusBar().showMessage(self._t("処理対象画像がありません", "No images found"))
         else:
-            self.statusBar().showMessage(f"{total}枚を処理します")
+            self.statusBar().showMessage(self._t(f"{total}枚を処理します", f"Processing {total} image(s)"))
 
     def _on_preview(self, frame: PreviewFrame) -> None:
         self.preview.set_frame(frame)
@@ -221,7 +253,10 @@ class MainWindow(QMainWindow):
             return
         if result.cancelled:
             self.detect_label.setText(f"CANCEL: {Path(src).name}")
-            self.statusBar().showMessage("停止しました — 処理途中の画像は保存していません")
+            self.statusBar().showMessage(self._t(
+                "停止しました — 処理途中の画像は保存していません",
+                "Stopped — the incomplete image was not saved",
+            ))
             return
         if result.skipped:
             self.detect_label.setText(f"SKIP: {Path(src).name}")
@@ -229,9 +264,11 @@ class MainWindow(QMainWindow):
         if result.detections:
             top = max(result.detections, key=lambda d: d.score)
             review = " / Review" if result.review_required else ""
-            self.detect_label.setText(f"Detected: {top.label} {top.score:.2f}{review}")
+            manual = self._t(" / 人数不一致", " / Count mismatch") if result.count_mismatch else ""
+            self.detect_label.setText(f"Detected: {top.label} {top.score:.2f}{review}{manual}")
         else:
-            self.detect_label.setText("Detected: 0")
+            manual = self._t(" / 手動確認へ隔離", " / Quarantined") if result.count_mismatch else ""
+            self.detect_label.setText(f"Detected: 0{manual}")
 
     def _on_runtime(self, info: RuntimeInfo) -> None:
         text = info.display_text
@@ -242,21 +279,28 @@ class MainWindow(QMainWindow):
         if info.available_providers:
             text += "\nProviders: " + ", ".join(info.available_providers)
         if not info.cuda_available:
-            text += "\n⚠ CUDAExecutionProvider がありません。CPU推論になります。"
+            text += self._t(
+                "\n⚠ CUDAExecutionProvider がありません。CPU推論になります。",
+                "\n⚠ CUDAExecutionProvider is unavailable. Inference will use the CPU.",
+            )
         elif not info.using_cuda:
-            text += "\n⚠ CUDAは利用可能ですが選択されていません。ONNX_MODE等を確認してください。"
+            text += self._t(
+                "\n⚠ CUDAは利用可能ですが選択されていません。ONNX_MODE等を確認してください。",
+                "\n⚠ CUDA is available but not selected. Check ONNX_MODE and the runtime configuration.",
+            )
         self.controls.set_runtime_text(text)
 
     def _on_finished(self, results: list[ProcessResult], log_path: str, stopped: bool) -> None:
         self._last_log_path = Path(log_path)
         errors = sum(1 for r in results if r.error)
         reviews = sum(1 for r in results if r.review_required)
+        mismatches = sum(1 for r in results if r.count_mismatch)
         detected = sum(1 for r in results if r.detections)
         skipped = sum(1 for r in results if r.skipped)
-        state = "停止" if stopped else "完了"
-        summary = (
-            f"{state}: {len(results)}件 / 検出 {detected}件 / Review {reviews}件 / "
-            f"Skip {skipped}件 / エラー {errors}件\nログ: {log_path}"
+        state = self._t("停止", "Stopped") if stopped else self._t("完了", "Complete")
+        summary = self._t(
+            f"{state}: {len(results)}件 / 検出 {detected}件 / 人数不一致 {mismatches}件 / Review {reviews}件 / Skip {skipped}件 / エラー {errors}件\nログ: {log_path}",
+            f"{state}: {len(results)} image(s) / detected {detected} / count mismatch {mismatches} / Review {reviews} / skipped {skipped} / errors {errors}\nLog: {log_path}",
         )
         self.controls.set_summary(summary)
         self.statusBar().showMessage(summary.replace("\n", "  "))
@@ -264,9 +308,9 @@ class MainWindow(QMainWindow):
 
     def _on_failed(self, message: str) -> None:
         self.controls.set_running(False)
-        self.controls.set_summary(f"エラー: {message}")
-        self.statusBar().showMessage("処理エラー")
-        QMessageBox.critical(self, "処理エラー", message)
+        self.controls.set_summary(self._t(f"エラー: {message}", f"Error: {message}"))
+        self.statusBar().showMessage(self._t("処理エラー", "Processing error"))
+        QMessageBox.critical(self, self._t("処理エラー", "Processing error"), message)
 
     def _thread_finished(self) -> None:
         self._thread = None
@@ -283,8 +327,11 @@ class MainWindow(QMainWindow):
             return
         answer = QMessageBox.question(
             self,
-            "処理中",
-            "処理中です。停止要求を出して、処理が止まってから終了しますか？",
+            self._t("処理中", "Processing"),
+            self._t(
+                "処理中です。停止要求を出して、処理が止まってから終了しますか？",
+                "Processing is active. Request a stop and close after the current pass finishes?",
+            ),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )

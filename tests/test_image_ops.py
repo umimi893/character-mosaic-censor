@@ -22,6 +22,16 @@ def test_mosaic_changes_target_region_only():
     assert out.crop((5, 5, 15, 15)).tobytes() != img.crop((5, 5, 15, 15)).tobytes()
 
 
+def test_mosaic_uses_oval_mask_instead_of_filling_box_corners():
+    img = Image.new("RGB", (30, 30), "white")
+    for x in range(5, 25):
+        for y in range(5, 25):
+            img.putpixel((x, y), (x * 7 % 255, y * 9 % 255, 80))
+    out = apply_mosaic(img, [(5, 5, 25, 25)], block_size=5, mode="mosaic")
+    assert out.getpixel((5, 5)) == img.getpixel((5, 5))
+    assert out.getpixel((15, 15)) != img.getpixel((15, 15))
+
+
 def test_black_mode():
     img = Image.new("RGB", (10, 10), "white")
     out = apply_mosaic(img, [(2, 2, 8, 8)], mode="black")

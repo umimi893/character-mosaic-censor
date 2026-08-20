@@ -48,4 +48,6 @@ class ProcessResult:
     error: str | None = None
     fatal_error: bool = False
     review_path: Path | None = None
+    count_mismatch: bool = False
+    manual_review_path: Path | None = None
     elapsed_seconds: float = 0.0

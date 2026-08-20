@@ -12,8 +12,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="アニメ/CG画像のセンシティブ領域を検出してローカル処理します。")
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     p.add_argument("input", type=Path, help="入力フォルダ")
-    p.add_argument("output", type=Path, help="出力フォルダ")
+    p.add_argument("output", type=Path, nargs="?", default=None, help="出力フォルダ（省略時は入力内の _censored）")
     p.add_argument("--review", type=Path, default=None, help="低信頼度画像の確認用フォルダ")
+    p.add_argument("--people", type=int, default=1, help="画像1枚あたりの想定人数")
     p.add_argument("--detect-threshold", type=float, default=0.12)
     p.add_argument("--auto-threshold", type=float, default=0.30)
     p.add_argument("--padding", type=int, default=12)
@@ -36,7 +37,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
+    output = args.output or (args.input / "_censored")
     cfg = PipelineConfig(
+        expected_person_count=args.people,
         detection_threshold=args.detect_threshold,
         auto_threshold=args.auto_threshold,
         padding_px=args.padding,
@@ -58,9 +61,9 @@ def main(argv=None) -> int:
     )
     cfg.validate()
     processor = BatchProcessor(cfg)
-    images = processor.discover_images(args.input, args.output, args.review)
+    images = processor.discover_images(args.input, output, args.review)
 
-    log = args.output.resolve().parent / "logs" / f"run_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.jsonl"
+    log = output.resolve().parent / "logs" / f"run_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.jsonl"
     logger = JsonlRunLogger(log, cfg).open(total_images=len(images))
 
     def progress(i, total, src, result):
@@ -79,7 +82,7 @@ def main(argv=None) -> int:
     try:
         results = processor.process_folder(
             args.input,
-            args.output,
+            output,
             args.review,
             progress=progress,
             images=images,

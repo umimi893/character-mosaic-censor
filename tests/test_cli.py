@@ -23,3 +23,12 @@ def test_cli_default_paths_and_flags(tmp_path):
     assert args.auto_threshold == 0.30
     assert args.no_tiles is False
     assert args.no_flip_tta is False
+
+
+def test_cli_output_can_be_omitted(tmp_path):
+    parser = build_parser()
+    input_dir = tmp_path / "in"
+    args = parser.parse_args([str(input_dir)])
+    assert args.input == input_dir
+    assert args.output is None
+    assert args.people == 1
