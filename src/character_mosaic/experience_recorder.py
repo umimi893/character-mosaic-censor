@@ -9,12 +9,12 @@ from .experience_store import (
     ExperienceStore,
     candidate_crop,
     candidate_fingerprint,
-    classify_pseudo_label,
     default_learning_root,
     sha256_file,
     suppression_reason_map,
 )
 from .image_ops import normalize_image
+from .pseudo_labels import classify_pseudo_label
 from .types import ProcessResult
 
 
