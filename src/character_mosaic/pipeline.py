@@ -11,7 +11,8 @@ import shutil
 from dataclasses import replace
 from pathlib import Path
 
-from .anatomy_filter import AnatomyAwareDetector, AnatomyFilterConfig
+from .anatomy_filter import AnatomyFilterConfig
+from .body_reasoning import BodyReasoningDetector
 from .i18n import t
 from .pipeline_config import PipelineConfig
 from .pipeline_logging import JsonlRunLogger, write_jsonl_log
@@ -23,15 +24,15 @@ from .pipeline_review import write_review_html
 class BatchProcessor(_BatchProcessor):
     """Batch processor with public UX/safety policy layers.
 
-    The default detector is wrapped by a body-region reasoning layer. Pelvis
-    evidence protects recall, face/head ambiguity is routed to Review, and only
-    strong hard-negative evidence is automatically suppressed.
+    The default detector is wrapped by the final body-region reasoning layer.
+    Pelvis evidence protects close-contact scenes, while strong face/head,
+    knee/armpit, and torso/back evidence can remove obvious false positives.
     """
 
     def __init__(self, config: PipelineConfig | None = None, detector=None):
         super().__init__(config=config, detector=detector)
-        if detector is None and not isinstance(self.detector, AnatomyAwareDetector):
-            self.detector = AnatomyAwareDetector(
+        if detector is None and not isinstance(self.detector, BodyReasoningDetector):
+            self.detector = BodyReasoningDetector(
                 self.detector,
                 AnatomyFilterConfig(enabled=self.config.anatomy_filter),
             )
@@ -41,12 +42,27 @@ class BatchProcessor(_BatchProcessor):
         if callable(reset):
             reset()
 
-    def process_file(self, source, output, review_copy=None, manual_review_copy=None,
-                     manual_review_annotated=None, preview=None, stop_requested=None):
+    def process_file(
+        self,
+        source,
+        output,
+        review_copy=None,
+        manual_review_copy=None,
+        manual_review_annotated=None,
+        preview=None,
+        stop_requested=None,
+    ):
         self._reset_anatomy_diagnostics()
         if not self.config.review_only_over_count:
-            return super().process_file(source, output, review_copy, manual_review_copy,
-                                        manual_review_annotated, preview, stop_requested)
+            return super().process_file(
+                source,
+                output,
+                review_copy,
+                manual_review_copy,
+                manual_review_annotated,
+                preview,
+                stop_requested,
+            )
 
         expected = self.config.expected_person_count
 
@@ -55,16 +71,40 @@ class BatchProcessor(_BatchProcessor):
                 return
             count = len(frame.detections)
             if frame.stage == "detected" and count <= expected:
-                status = (t(self.config.language, "対象未検出（正常扱い）", "No target detected (treated as normal)")
-                          if count == 0 else t(self.config.language, f"検出完了: {count}件", f"Detection complete: {count}"))
+                status = (
+                    t(
+                        self.config.language,
+                        "対象未検出（正常扱い）",
+                        "No target detected (treated as normal)",
+                    )
+                    if count == 0
+                    else t(
+                        self.config.language,
+                        f"検出完了: {count}件",
+                        f"Detection complete: {count}",
+                    )
+                )
                 frame = replace(frame, status=status)
             elif frame.stage == "censored" and count == 0:
-                frame = replace(frame, status=t(self.config.language, "対象未検出: 元画像をそのまま保存", "No target detected: original image copied unchanged"))
+                frame = replace(
+                    frame,
+                    status=t(
+                        self.config.language,
+                        "対象未検出: 元画像をそのまま保存",
+                        "No target detected: original image copied unchanged",
+                    ),
+                )
             preview(frame)
 
-        result = super().process_file(source, output, review_copy, manual_review_copy,
-                                      manual_review_annotated, preview_proxy if preview is not None else None,
-                                      stop_requested)
+        result = super().process_file(
+            source,
+            output,
+            review_copy,
+            manual_review_copy,
+            manual_review_annotated,
+            preview_proxy if preview is not None else None,
+            stop_requested,
+        )
         if result.error or result.cancelled or result.skipped or result.fatal_error:
             return result
 
@@ -81,6 +121,8 @@ class BatchProcessor(_BatchProcessor):
                 return replace(result, manual_review_path=edit_path)
             return result
 
+        # Re-running with overwrite enabled must also clean stale manual-review
+        # artifacts when the latest result no longer needs them.
         if manual_bundle is not None:
             for path in manual_bundle:
                 path.unlink(missing_ok=True)
@@ -96,12 +138,23 @@ def _manual_review_bundle_paths(manual_review_copy: Path | None) -> tuple[Path, 
     if manual_review_copy is None:
         return None
     original_path = Path(manual_review_copy)
-    original_root = next((parent for parent in original_path.parents if parent.name == "original" and parent.parent.name == "_manual_review"), None)
+    original_root = next(
+        (
+            parent
+            for parent in original_path.parents
+            if parent.name == "original" and parent.parent.name == "_manual_review"
+        ),
+        None,
+    )
     if original_root is None:
         return None
     relative = original_path.relative_to(original_root)
     root = original_root.parent
-    return root / "edit" / relative, root / "reference_bbox" / relative, root / "auto_censored" / relative
+    return (
+        root / "edit" / relative,
+        root / "reference_bbox" / relative,
+        root / "auto_censored" / relative,
+    )
 
 
 def _move_if_exists(source: Path | None, destination: Path) -> None:
@@ -115,4 +168,12 @@ def _move_if_exists(source: Path | None, destination: Path) -> None:
     source.replace(destination)
 
 
-__all__ = ["BatchProcessor", "PipelineConfig", "JsonlRunLogger", "discover_images", "validate_processing_paths", "write_jsonl_log", "write_review_html"]
+__all__ = [
+    "BatchProcessor",
+    "PipelineConfig",
+    "JsonlRunLogger",
+    "discover_images",
+    "validate_processing_paths",
+    "write_jsonl_log",
+    "write_review_html",
+]
