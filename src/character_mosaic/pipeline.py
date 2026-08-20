@@ -11,7 +11,7 @@ import shutil
 from dataclasses import replace
 from pathlib import Path
 
-from .anatomy_filter import AnatomyAwareDetector
+from .anatomy_filter import AnatomyAwareDetector, AnatomyFilterConfig
 from .i18n import t
 from .pipeline_config import PipelineConfig
 from .pipeline_logging import JsonlRunLogger, write_jsonl_log
@@ -44,7 +44,10 @@ class BatchProcessor(_BatchProcessor):
         super().__init__(config=config, detector=detector)
         # Custom detectors supplied by callers/tests are preserved exactly.
         if detector is None and not isinstance(self.detector, AnatomyAwareDetector):
-            self.detector = AnatomyAwareDetector(self.detector)
+            self.detector = AnatomyAwareDetector(
+                self.detector,
+                AnatomyFilterConfig(enabled=self.config.anatomy_filter),
+            )
 
     def _reset_anatomy_diagnostics(self) -> None:
         reset = getattr(self.detector, "reset_filter_state", None)
