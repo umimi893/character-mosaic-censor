@@ -23,6 +23,9 @@ def test_output_follow_panel_constructs_without_missing_widget(tmp_path):
     assert panel.output_fixed is not None
     assert panel._output_is_fixed() is False
     assert panel.overwrite.isChecked() is True
+    assert panel.learning_capture.isChecked() is True
+    assert panel.learning_button is not None
+    assert panel.config().learning_enabled is True
     panel.close()
     app.processEvents()
 
@@ -44,6 +47,26 @@ def test_output_lock_survives_settings_roundtrip(tmp_path):
 
     assert second._output_is_fixed() is True
     assert second.output_edit.text() == str(tmp_path / "shared_output")
+    second.close()
+    app.processEvents()
+
+
+def test_learning_capture_survives_settings_roundtrip(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    settings_path = tmp_path / "settings.ini"
+    settings = QSettings(str(settings_path), QSettings.Format.IniFormat)
+
+    first = OutputFollowControlPanel(settings=settings)
+    first.learning_capture.setChecked(False)
+    first.save_settings(settings)
+    first.close()
+
+    restored_settings = QSettings(str(settings_path), QSettings.Format.IniFormat)
+    second = OutputFollowControlPanel(settings=restored_settings)
+    second.load_settings(restored_settings)
+
+    assert second.learning_capture.isChecked() is False
+    assert second.config().learning_enabled is False
     second.close()
     app.processEvents()
 
