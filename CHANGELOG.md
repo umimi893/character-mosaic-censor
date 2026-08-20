@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.1
+
+Windows GUI hotfix release.
+
+- Fixed `pythonw.exe` inference crashes caused by missing `sys.stdout` / `sys.stderr` when third-party inference code writes progress output.
+- Fixed the output-folder follow behavior so `<input>\_censored` updates automatically when the input folder changes unless the user explicitly locks the output path.
+- Added an `Output folder lock` control and safe migration for previously customized output paths.
+- Fixed an initialization-order regression in the output-lock UI.
+- Forced a complete dark application palette so Windows light mode cannot leak white native backgrounds behind light text.
+- Added regression coverage for console-less standard streams, output path migration, and OS-theme background leaks.
+
 ## 1.0.0
 
 First public-ready release.
