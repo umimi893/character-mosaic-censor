@@ -35,10 +35,10 @@ class PipelineConfig:
     generate_review_html: bool = True
     preview_max_side: int = 1600
     jpeg_quality: int = 95
-    # Keep a compact local record of candidate crops/evidence so normal usage
-    # continuously expands the hard-negative corpus. Original images are never
-    # copied into the learning store.
-    learning_enabled: bool = True
+    # Core/CLI callers stay side-effect free by default. The desktop GUI turns
+    # this on by default so normal interactive use continuously expands the
+    # local hard-negative corpus without changing original images.
+    learning_enabled: bool = False
     # Backward-compatible core default is exact matching. The GUI enables this
     # so the person count acts as a maximum plausible number of detections:
     # zero/no-target and partial visibility are normal, only excess detections
