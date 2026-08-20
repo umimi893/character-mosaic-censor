@@ -2,7 +2,7 @@
 
 **Character Mosaic Censor** is a Windows desktop application that automatically detects and censors sensitive anatomical regions in anime, CG, and AI-generated character images. Processing is performed locally on your PC, with a review workflow for uncertain or suspicious results.
 
-**Version:** 1.0.1  
+**Version:** 1.1.0  
 **Platform:** Windows 10 / 11  
 **Recommended:** Python 3.11 + NVIDIA GPU
 
@@ -11,6 +11,7 @@
 - PySide6 desktop GUI with Japanese / English display switching
 - Large live preview for original, detected, and censored images
 - Anime/CG detection powered by `dghs-imgutils`
+- Automatic anatomy-aware false-positive suppression for obvious knee/armpit detections
 - Full-frame detection plus large-image tiled inference and retry passes
 - Mosaic / Blur / Black censor modes
 - Low-confidence Review output and manual-review quarantine for suspicious detections
@@ -34,12 +35,34 @@ If the GUI does not open, check `startup_error.log` in the repository folder or 
 ## Basic usage
 
 1. Select the folder containing source images.
-2. By default the output follows the input as `<input>\_censored`. Enable **Lock output folder** if you want to keep one custom output path while changing inputs.
+2. Leave the output lock off to automatically use `<input>\_censored`, or lock/select a custom output folder when needed.
 3. Adjust censor mode or detection settings only when necessary.
 4. Click **Run**.
 5. Check Review/manual-review items before publishing or distributing the results.
 
 Supported input formats include PNG, JPEG, and WebP.
+
+## Automatic anatomy check
+
+Version 1.1 adds a conservative second check for detector candidates using the anime-oriented person detector and DWPose support already available through `dghs-imgutils`.
+
+The normal censor detector still runs first. When it finds a candidate, the anatomy check may use detected people plus shoulder/hip/knee keypoints to reject an obvious body-position false positive. A candidate is removed only when it is reliably near a knee or armpit and clearly separated from the pelvis.
+
+The anatomy check is intentionally **fail-open** to protect recall. The original detector result is kept when:
+
+- no reliable person or pose is found,
+- both hips cannot be located reliably,
+- the candidate remains plausibly close to the pelvis,
+- multiple overlapping people make the body assignment ambiguous, or
+- the helper model/dependency cannot load.
+
+If the helper cannot load, it is disabled for the rest of that batch instead of repeatedly failing. Normal censor detection continues.
+
+The first run that needs this check may download additional upstream person/pose model files. Images are still processed locally; only upstream model files may be downloaded.
+
+For troubleshooting, set the environment variable `CMC_ANATOMY_FILTER=0` before launch to disable this extra check and return to the v1.0 detector behavior.
+
+JSONL logs record `anatomy_filter_status`, any `anatomy_suppressed` boxes, and the corresponding suppression reasons. The GUI also shows the number of candidates removed by the anatomy check.
 
 ## Review behavior
 
@@ -57,7 +80,7 @@ diagnose.bat
 run.bat
 ```
 
-`install_gpu.bat` creates a local `.venv` and installs the GPU dependencies. The first detector run may download upstream model data if it is not already cached.
+`install_gpu.bat` creates a local `.venv` and installs the GPU dependencies. The first detector/anatomy-check run may download upstream model data if it is not already cached.
 
 To test the actual model load:
 
