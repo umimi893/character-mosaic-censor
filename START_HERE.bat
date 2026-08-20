@@ -4,8 +4,15 @@ chcp 65001 >nul
 cd /d "%~dp0"
 title Character Mosaic Censor
 
+rem Read the displayed version from pyproject.toml so release bumps cannot
+rem leave this launcher showing an old hard-coded version.
+set "APP_VERSION=unknown"
+for /f "tokens=2 delims==" %%V in ('findstr /b /c:"version = " "pyproject.toml" 2^>nul') do set "APP_VERSION=%%V"
+set "APP_VERSION=%APP_VERSION: =%"
+set "APP_VERSION=%APP_VERSION:"=%"
+
 echo ================================================
-echo Character Mosaic Censor v1.0.0
+echo Character Mosaic Censor v%APP_VERSION%
 echo ================================================
 echo.
 
