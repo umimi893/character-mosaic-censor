@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.1.0
+
+Automatic anatomy-aware false-positive suppression.
+
+- Added a conservative DWPose-based sanity check after the normal censor detector.
+- Added automatic suppression for candidates that are reliably placed near a knee or armpit while clearly separated from the pelvis.
+- Kept recall-first fail-open behavior: missing people, missing hips, weak/ambiguous poses, overlapping-person ambiguity, or helper-model errors keep the original detector candidate.
+- Added automatic run-wide fallback to the original detector when the anatomy helper cannot load, so a missing helper model does not stop a batch or retry on every image.
+- Added `CMC_ANATOMY_FILTER=0` as an emergency disable switch without adding another normal-user UI setting.
+- Added per-image JSONL diagnostics for anatomy-filter status, suppressed detector boxes, and suppression reasons.
+- Added GUI counters showing how many obvious body-position false-positive candidates were removed.
+- Added regression coverage for pelvis protection, knee/armpit suppression, ambiguous multi-person scenes, helper failures, simple detector signatures, and the emergency override.
+
 ## 1.0.1
 
 Windows GUI hotfix release.
