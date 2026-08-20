@@ -7,10 +7,10 @@ from character_mosaic.experience_recorder import record_process_experience
 from character_mosaic.experience_store import (
     ExperienceStore,
     candidate_fingerprint,
-    classify_pseudo_label,
     fingerprint_hamming,
 )
 from character_mosaic.negative_memory import apply_negative_memory
+from character_mosaic.pseudo_labels import classify_pseudo_label
 from character_mosaic.types import CandidateEvidence, Detection, ProcessResult
 
 
@@ -25,11 +25,19 @@ def _negative_evidence(box=(10, 10, 30, 30)):
     )
 
 
-def _seed_gold_negatives(store, image, detection, count=8):
+def _seed_gold_negatives(store, image, detection, count=8, *, distinct=True):
     # Match candidate_crop(..., context_ratio=1.8) for the uniform test image.
     crop = image.crop((11, 11, 49, 49))
-    fingerprint = candidate_fingerprint(crop)
+    base = candidate_fingerprint(crop)
+    base_value = int(base, 16)
     for index in range(count):
+        # Change only low-order bits, preserving the indexed prefix while
+        # creating distinct fingerprints one bit away from the query crop.
+        fingerprint = (
+            f"{base_value ^ (1 << index):032x}"
+            if distinct
+            else base
+        )
         source_id = store.upsert_source(
             source_key=f"file://neg{index}.png", container_path=f"neg{index}.png", member_path=None,
             signature="1", sha256=f"hash{index}", size_bytes=100, width=80, height=80,
@@ -74,6 +82,22 @@ def test_store_deduplicates_source_hash_and_counts_candidates(tmp_path):
     assert stats["sources"] == 1
     assert stats["candidates"] == 1
     assert stats["candidate_negative_gold"] == 1
+
+
+def test_runtime_review_suppression_is_not_gold_training_data():
+    detection = Detection((10, 10, 30, 30), "pussy", 0.6, "full")
+    evidence = CandidateEvidence(
+        detection=detection,
+        decision="suppress",
+        negative_signals=("review_without_pelvis",),
+        matched_persons=(0,),
+        pelvis_distance_ratio=1.0,
+    )
+    assert classify_pseudo_label(evidence, "review_without_pelvis") == (
+        "negative",
+        "silver",
+        "review_only",
+    )
 
 
 def test_normal_rerun_replaces_stale_candidate_evidence(tmp_path):
@@ -139,7 +163,7 @@ def test_ambiguous_keep_goes_to_quarantine():
     assert classify_pseudo_label(evidence, None) == ("quarantine", "quarantine", None)
 
 
-def test_repeated_gold_negative_can_veto_unprotected_candidate(tmp_path):
+def test_repeated_distinct_gold_negatives_can_veto_unprotected_candidate(tmp_path):
     store = ExperienceStore(tmp_path / "experience.sqlite3")
     image = Image.new("RGB", (80, 80), (180, 160, 150))
     detection = Detection((20, 20, 40, 40), "pussy", 0.4, "full")
@@ -149,12 +173,32 @@ def test_repeated_gold_negative_can_veto_unprotected_candidate(tmp_path):
         matched_persons=(0,),
         pelvis_distance_ratio=1.0,
     )
-    _seed_gold_negatives(store, image, detection, count=5)
+    _seed_gold_negatives(store, image, detection, count=5, distinct=True)
 
     result = AnatomyFilterResult(kept=(detection,), evidence=(evidence,), status="applied")
     final = apply_negative_memory(result, image, store)
     assert final.kept == tuple()
     assert final.suppressed[0].reason == "known_negative_memory"
+
+
+def test_duplicate_gold_fingerprints_do_not_manufacture_memory_confidence(tmp_path):
+    store = ExperienceStore(tmp_path / "experience.sqlite3")
+    image = Image.new("RGB", (80, 80), (180, 160, 150))
+    detection = Detection((20, 20, 40, 40), "pussy", 0.3, "full")
+    evidence = CandidateEvidence(
+        detection=detection,
+        decision="keep",
+        matched_persons=(0,),
+        pelvis_distance_ratio=1.0,
+    )
+    _seed_gold_negatives(store, image, detection, count=12, distinct=False)
+    final = apply_negative_memory(
+        AnatomyFilterResult(kept=(detection,), evidence=(evidence,), status="applied"),
+        image,
+        store,
+    )
+    assert final.kept == (detection,)
+    assert final.suppressed == tuple()
 
 
 def test_unmatched_candidate_disables_negative_memory(tmp_path):
