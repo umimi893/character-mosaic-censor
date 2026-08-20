@@ -19,7 +19,13 @@ class OutputFollowControlPanel(EnhancedControlPanel):
     The output path follows ``<input>/_censored`` unless the user explicitly
     fixes it. Manually editing or browsing for an output folder automatically
     enables the fixed state.
+
+    The boolean state is deliberately independent from the checkbox widget so
+    virtual method calls made while Qt/base classes are still initializing can
+    never fail just because ``output_fixed`` has not been constructed yet.
     """
+
+    _output_fixed_state = False
 
     def __init__(
         self,
@@ -29,6 +35,7 @@ class OutputFollowControlPanel(EnhancedControlPanel):
     ):
         super().__init__(language, parent, settings)
 
+        self._output_fixed_state = False
         self.output_fixed = QCheckBox()
         io_layout = self.io_group.layout()
         # Input row, output row, [lock], review row.
@@ -40,10 +47,11 @@ class OutputFollowControlPanel(EnhancedControlPanel):
 
     def retranslate(self) -> None:
         super().retranslate()
-        if not hasattr(self, "output_fixed"):
+        checkbox = getattr(self, "output_fixed", None)
+        if checkbox is None:
             return
-        self.output_fixed.setText(self._t("出力先を固定", "Lock output folder"))
-        self.output_fixed.setToolTip(
+        checkbox.setText(self._t("出力先を固定", "Lock output folder"))
+        checkbox.setToolTip(
             self._t(
                 "OFFでは入力フォルダを変更すると出力も自動で <入力>\\_censored に切り替わります。"
                 "出力先を手入力または参照で選ぶと自動的に固定されます。",
@@ -53,8 +61,17 @@ class OutputFollowControlPanel(EnhancedControlPanel):
         )
 
     def _output_is_fixed(self) -> bool:
+        return bool(getattr(self, "_output_fixed_state", False))
+
+    def _set_output_fixed_state(self, fixed: bool) -> None:
+        fixed = bool(fixed)
+        self._output_fixed_state = fixed
         checkbox = getattr(self, "output_fixed", None)
-        return bool(checkbox is not None and checkbox.isChecked())
+        if checkbox is None or checkbox.isChecked() == fixed:
+            return
+        checkbox.blockSignals(True)
+        checkbox.setChecked(fixed)
+        checkbox.blockSignals(False)
 
     def _update_output_default(self, text: str) -> None:
         if self._output_is_fixed():
@@ -64,21 +81,21 @@ class OutputFollowControlPanel(EnhancedControlPanel):
             self.output_edit.setText(target)
 
     def _fix_output_after_manual_edit(self, _text: str) -> None:
-        if not self.output_fixed.isChecked():
-            self.output_fixed.setChecked(True)
+        self._set_output_fixed_state(True)
 
     def _on_output_fixed_toggled(self, fixed: bool) -> None:
+        self._output_fixed_state = bool(fixed)
         if not fixed:
             self._update_output_default(self.input_edit.text())
 
     def set_output_path(self, path: str) -> None:
         # Choosing a folder with the Browse dialog is an explicit custom output.
-        self.output_fixed.setChecked(True)
+        self._set_output_fixed_state(True)
         super().set_output_path(path)
 
     def save_settings(self, settings: QSettings) -> None:
         super().save_settings(settings)
-        settings.setValue("paths/output_fixed", self.output_fixed.isChecked())
+        settings.setValue("paths/output_fixed", self._output_is_fixed())
         settings.sync()
 
     def load_settings(self, settings: QSettings) -> None:
@@ -94,12 +111,12 @@ class OutputFollowControlPanel(EnhancedControlPanel):
         else:
             fixed = _as_bool(raw_fixed)
 
-        self.output_fixed.blockSignals(True)
-        self.output_fixed.setChecked(fixed)
-        self.output_fixed.blockSignals(False)
+        self._set_output_fixed_state(fixed)
         if not fixed:
             self._update_output_default(self.input_edit.text())
 
     def set_running(self, running: bool) -> None:
         super().set_running(running)
-        self.output_fixed.setEnabled(not running)
+        checkbox = getattr(self, "output_fixed", None)
+        if checkbox is not None:
+            checkbox.setEnabled(not running)
