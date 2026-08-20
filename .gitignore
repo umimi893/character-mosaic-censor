@@ -3,10 +3,13 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .mypy_cache/
+.coverage
+htmlcov/
 output/
 review/
-logs/*.jsonl
-logs/*.csv
+logs/
+benchmark_results/
+startup_error.log
 models/*.onnx
 models/*.pt
 models/*.pth
