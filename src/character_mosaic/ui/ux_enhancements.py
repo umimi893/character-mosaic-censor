@@ -6,6 +6,15 @@ from ..types import ProcessResult
 from .main_window import MainWindow
 
 
+_DEGRADED_ANALYSIS_PREFIXES = (
+    "partial:",
+    "partial_disabled:",
+    "unavailable:",
+    "failed:",
+    "disabled_after_failure",
+)
+
+
 class EnhancedMainWindow(MainWindow):
     """Main window UX additions layered over the stable worker implementation."""
 
@@ -39,7 +48,7 @@ class EnhancedMainWindow(MainWindow):
         suppressed=len(result.anatomy_suppressed); evidence_review=sum(1 for item in result.candidate_evidence if item.decision=="review")
         filtered=self._t(f" / 人体解析で除外 {suppressed}",f" / body-filtered {suppressed}") if suppressed else ""
         body_review=self._t(f" / 人体解析Review {evidence_review}",f" / body-review {evidence_review}") if evidence_review else ""
-        status=result.anatomy_filter_status; degraded=status.startswith(("partial:","unavailable:","failed:","disabled_after_failure")); degraded_text=self._t(" / 人体解析一部無効"," / body analysis degraded") if degraded else ""
+        status=result.anatomy_filter_status; degraded=status.startswith(_DEGRADED_ANALYSIS_PREFIXES); degraded_text=self._t(" / 人体解析一部無効"," / body analysis degraded") if degraded else ""
         if result.detections:
             top=max(result.detections,key=lambda d:d.score); review=" / Review" if result.review_required else ""; over=self._t(" / 検出過多"," / Over-detected") if result.count_mismatch else ""
             self.detect_label.setText(f"Detected: {len(result.detections)} / {top.label} {top.score:.2f}{review}{over}{filtered}{body_review}{degraded_text}")
@@ -51,7 +60,7 @@ class EnhancedMainWindow(MainWindow):
     def _on_finished(self,results:list[ProcessResult],log_path:str,stopped:bool)->None:
         self._last_log_path=Path(log_path); errors=sum(1 for r in results if r.error); reviews=sum(1 for r in results if r.review_required); over=sum(1 for r in results if r.count_mismatch)
         detected=sum(1 for r in results if r.detections and not r.error and not r.cancelled and not r.skipped); no_target=sum(1 for r in results if not r.detections and not r.error and not r.cancelled and not r.skipped); skipped=sum(1 for r in results if r.skipped)
-        suppressed=sum(len(r.anatomy_suppressed) for r in results); body_review=sum(sum(1 for item in r.candidate_evidence if item.decision=="review") for r in results); degraded=sum(1 for r in results if r.anatomy_filter_status.startswith(("partial:","unavailable:","failed:","disabled_after_failure")))
+        suppressed=sum(len(r.anatomy_suppressed) for r in results); body_review=sum(sum(1 for item in r.candidate_evidence if item.decision=="review") for r in results); degraded=sum(1 for r in results if r.anatomy_filter_status.startswith(_DEGRADED_ANALYSIS_PREFIXES))
         state=self._t("停止","Stopped") if stopped else self._t("完了","Complete")
         summary=self._t(f"{state}: {len(results)}件 / 検出あり {detected}件 / 対象未検出 {no_target}件 / 人体解析で除外 {suppressed}件 / 人体解析Review {body_review}件 / 人体解析縮退 {degraded}件 / 検出過多 {over}件 / Review {reviews}件 / Skip {skipped}件 / エラー {errors}件\nログ: {log_path}",f"{state}: {len(results)} image(s) / target detected {detected} / no target detected {no_target} / body-filtered {suppressed} / body-review {body_review} / body-analysis degraded {degraded} / over-detected {over} / Review {reviews} / skipped {skipped} / errors {errors}\nLog: {log_path}")
         self.controls.set_summary(summary); self.statusBar().showMessage(summary.replace("\n","  ")); self.controls.set_running(False)
