@@ -20,12 +20,12 @@ from .experience_store import (
     MiningStats,
     candidate_crop,
     candidate_fingerprint,
-    classify_pseudo_label,
     default_learning_root,
     sha256_bytes,
     sha256_file,
 )
 from .image_ops import normalize_image
+from .pseudo_labels import classify_pseudo_label
 
 
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
@@ -37,6 +37,8 @@ class CorpusMinerConfig:
     recursive: bool = True
     min_side: int = 128
     max_pixels: int = 80_000_000
+    max_file_bytes: int = 256 * 1024 * 1024
+    max_archive_member_bytes: int = 256 * 1024 * 1024
     save_crops: bool = True
     idle_gpu_only: bool = True
     max_gpu_utilization: int = 30
@@ -52,6 +54,7 @@ class CorpusEntry:
     signature: str
     size_bytes: int
     data: bytes | None = None
+    skip_reason: str | None = None
 
 
 ProgressCallback = Callable[[MiningStats, str], None]
@@ -59,7 +62,13 @@ StopRequested = Callable[[], bool]
 
 
 class CorpusMiner:
-    """Mine noisy image folders/ZIPs for reusable candidate experience."""
+    """Mine noisy image folders/ZIPs for reusable candidate experience.
+
+    Legacy material is never trusted wholesale as ground truth. The miner first
+    asks the current detector for candidate regions, then stores only
+    conservative pseudo-label/evidence records. Corrupt, duplicate, ambiguous,
+    or unreasonably large inputs do not abort the run.
+    """
 
     def __init__(
         self,
@@ -74,10 +83,9 @@ class CorpusMiner:
 
     @staticmethod
     def _build_detector():
-        # Mining is interested in false-positive candidates produced by normal
-        # passes. Expensive flip/rotation retries after *zero* detections add no
-        # hard-negative sample, so disable only that fallback while retaining
-        # large-image tiled detection.
+        # A zero-result corpus image contributes no candidate, so expensive
+        # flip/rotation retries add little mining value. Production processing
+        # keeps its normal TTA behavior; only the unattended miner disables it.
         base = AnimeCensorDetector(DetectorConfig(flip_tta=False))
         body = BodyReasoningDetector(base, AnatomyFilterConfig(enabled=True))
         return GeometryV2Detector(body)
@@ -117,7 +125,21 @@ class CorpusMiner:
 
                 if self.store.source_seen(entry.source_key, entry.signature):
                     counters["skipped"] += 1
-                    self._emit(progress, counters, f"既に解析済み: {entry.member_path or entry.container_path.name}")
+                    self._emit(
+                        progress,
+                        counters,
+                        f"既に解析済み: {entry.member_path or entry.container_path.name}",
+                    )
+                    continue
+
+                if entry.skip_reason:
+                    counters["skipped"] += 1
+                    self._record_bad_entry(entry, entry.skip_reason)
+                    self._emit(
+                        progress,
+                        counters,
+                        f"SKIP: {entry.member_path or entry.container_path.name} ({entry.skip_reason})",
+                    )
                     continue
 
                 if self.config.idle_gpu_only and not self._wait_for_gpu_idle(stop_requested):
@@ -128,19 +150,27 @@ class CorpusMiner:
                     outcome = self._process_entry(entry)
                     counters["processed"] += 1
                     counters["duplicates"] += int(outcome["duplicate"])
-                    counters["candidates"] += outcome["candidates"]
-                    counters["gold_negative"] += outcome["gold_negative"]
-                    counters["silver"] += outcome["silver"]
-                    counters["quarantine"] += outcome["quarantine"]
-                    self._emit(progress, counters, outcome["message"])
+                    counters["candidates"] += int(outcome["candidates"])
+                    counters["gold_negative"] += int(outcome["gold_negative"])
+                    counters["silver"] += int(outcome["silver"])
+                    counters["quarantine"] += int(outcome["quarantine"])
+                    self._emit(progress, counters, str(outcome["message"]))
                 except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError) as exc:
                     counters["skipped"] += 1
                     self._record_bad_entry(entry, f"{type(exc).__name__}: {exc}")
                     self._emit(progress, counters, f"SKIP: {entry.member_path or entry.container_path.name}")
                 except Exception as exc:
                     counters["errors"] += 1
-                    self._record_bad_entry(entry, f"{type(exc).__name__}: {exc}", status="error")
-                    self._emit(progress, counters, f"ERROR: {entry.member_path or entry.container_path.name}: {exc}")
+                    self._record_bad_entry(
+                        entry,
+                        f"{type(exc).__name__}: {exc}",
+                        status="error",
+                    )
+                    self._emit(
+                        progress,
+                        counters,
+                        f"ERROR: {entry.member_path or entry.container_path.name}: {exc}",
+                    )
         finally:
             stats = MiningStats(**counters)
             self.store.finish_mining_run(run_id, stats, stopped)
@@ -164,8 +194,11 @@ class CorpusMiner:
                 duplicate_of=duplicate_of,
             )
             return {
-                "duplicate": True, "candidates": 0, "gold_negative": 0,
-                "silver": 0, "quarantine": 0,
+                "duplicate": True,
+                "candidates": 0,
+                "gold_negative": 0,
+                "silver": 0,
+                "quarantine": 0,
                 "message": f"重複をスキップ: {entry.member_path or entry.container_path.name}",
             }
 
@@ -190,10 +223,11 @@ class CorpusMiner:
         self.detector.detect(image)
         analysis = getattr(self.detector, "last_filter_result", None)
         evidence_items = tuple(getattr(analysis, "evidence", ())) if analysis is not None else tuple()
-        suppressed = {
-            item.detection: item.reason
-            for item in tuple(getattr(analysis, "suppressed", ()))
-        } if analysis is not None else {}
+        suppressed = (
+            {item.detection: item.reason for item in tuple(getattr(analysis, "suppressed", ()))}
+            if analysis is not None
+            else {}
+        )
 
         gold = silver = quarantine = 0
         for evidence in evidence_items:
@@ -210,7 +244,9 @@ class CorpusMiner:
             fingerprint = candidate_fingerprint(crop)
             crop_path: str | None = None
             if self.config.save_crops and tier in {"gold", "silver"}:
-                crop_path = str(self._save_crop(crop, fingerprint, pseudo_label, negative_kind))
+                crop_path = str(
+                    self._save_crop(crop, fingerprint, pseudo_label, negative_kind)
+                )
             self.store.record_candidate(
                 source_id,
                 evidence,
@@ -240,7 +276,12 @@ class CorpusMiner:
             opened.load()
             return normalize_image(opened.copy())
 
-    def _record_bad_entry(self, entry: CorpusEntry, reason: str, status: str = "skipped") -> None:
+    def _record_bad_entry(
+        self,
+        entry: CorpusEntry,
+        reason: str,
+        status: str = "skipped",
+    ) -> None:
         self.store.upsert_source(
             source_key=entry.source_key,
             container_path=str(entry.container_path),
@@ -254,7 +295,11 @@ class CorpusMiner:
             skip_reason=reason[:1000],
         )
 
-    def _iter_entries(self, root: Path, stop_requested: StopRequested | None) -> Iterator[CorpusEntry]:
+    def _iter_entries(
+        self,
+        root: Path,
+        stop_requested: StopRequested | None,
+    ) -> Iterator[CorpusEntry]:
         iterator = root.rglob("*") if self.config.recursive else root.glob("*")
         for path in sorted(iterator):
             if stop_requested and stop_requested():
@@ -264,17 +309,27 @@ class CorpusMiner:
             suffix = path.suffix.lower()
             stat = path.stat()
             if suffix in _IMAGE_SUFFIXES:
+                too_large = stat.st_size > self.config.max_file_bytes
                 yield CorpusEntry(
                     source_key=f"file://{path.resolve()}",
                     container_path=path.resolve(),
                     member_path=None,
                     signature=f"{stat.st_size}:{stat.st_mtime_ns}:v{__version__}",
                     size_bytes=stat.st_size,
+                    skip_reason=(
+                        f"file_too_large:{stat.st_size}"
+                        if too_large
+                        else None
+                    ),
                 )
             elif suffix == ".zip" and self.config.include_zip:
                 yield from self._iter_zip(path.resolve(), stop_requested)
 
-    def _iter_zip(self, path: Path, stop_requested: StopRequested | None) -> Iterator[CorpusEntry]:
+    def _iter_zip(
+        self,
+        path: Path,
+        stop_requested: StopRequested | None,
+    ) -> Iterator[CorpusEntry]:
         stat = path.stat()
         try:
             with zipfile.ZipFile(path, "r") as archive:
@@ -283,28 +338,80 @@ class CorpusMiner:
                         return
                     if info.is_dir() or Path(info.filename).suffix.lower() not in _IMAGE_SUFFIXES:
                         continue
+
                     source_key = f"zip://{path}#{info.filename}"
                     signature = (
-                        f"{stat.st_size}:{stat.st_mtime_ns}:{info.CRC}:{info.file_size}:v{__version__}"
+                        f"{stat.st_size}:{stat.st_mtime_ns}:{info.CRC}:"
+                        f"{info.file_size}:v{__version__}"
                     )
-                    if self.store.source_seen(source_key, signature):
-                        yield CorpusEntry(source_key, path, info.filename, signature, info.file_size, b"")
-                        continue
-                    try:
-                        data = archive.read(info)
-                    except (OSError, RuntimeError, zipfile.BadZipFile):
-                        self._record_bad_entry(
-                            CorpusEntry(source_key, path, info.filename, signature, info.file_size),
-                            "zip_member_read_failed",
+                    entry = CorpusEntry(
+                        source_key,
+                        path,
+                        info.filename,
+                        signature,
+                        info.file_size,
+                    )
+
+                    if info.file_size > self.config.max_archive_member_bytes:
+                        yield CorpusEntry(
+                            **{
+                                **entry.__dict__,
+                                "skip_reason": f"zip_member_too_large:{info.file_size}",
+                            }
                         )
                         continue
-                    yield CorpusEntry(source_key, path, info.filename, signature, info.file_size, data)
+
+                    if self.store.source_seen(source_key, signature):
+                        # Yield a zero-byte placeholder; mine() will recognize
+                        # source_seen before decode and therefore avoid ZIP I/O.
+                        yield CorpusEntry(
+                            source_key,
+                            path,
+                            info.filename,
+                            signature,
+                            info.file_size,
+                            b"",
+                        )
+                        continue
+
+                    try:
+                        data = archive.read(info)
+                    except (OSError, RuntimeError, zipfile.BadZipFile) as exc:
+                        yield CorpusEntry(
+                            source_key,
+                            path,
+                            info.filename,
+                            signature,
+                            info.file_size,
+                            b"",
+                            f"zip_member_read_failed:{type(exc).__name__}",
+                        )
+                        continue
+                    yield CorpusEntry(
+                        source_key,
+                        path,
+                        info.filename,
+                        signature,
+                        info.file_size,
+                        data,
+                    )
         except (OSError, zipfile.BadZipFile):
-            # A broken ZIP is just noisy corpus input, not a fatal mining error.
+            # A broken ZIP is noisy corpus input, not a fatal mining error.
             return
 
-    def _save_crop(self, image: Image.Image, fingerprint: str, pseudo_label: str, negative_kind: str | None) -> Path:
-        root = default_learning_root() / "crops" / pseudo_label / (negative_kind or "generic")
+    def _save_crop(
+        self,
+        image: Image.Image,
+        fingerprint: str,
+        pseudo_label: str,
+        negative_kind: str | None,
+    ) -> Path:
+        root = (
+            default_learning_root()
+            / "crops"
+            / pseudo_label
+            / (negative_kind or "generic")
+        )
         root.mkdir(parents=True, exist_ok=True)
         path = root / f"{fingerprint}.webp"
         if not path.exists():
@@ -321,7 +428,11 @@ class CorpusMiner:
             time.sleep(max(0.5, self.config.idle_poll_seconds))
 
     @staticmethod
-    def _emit(progress: ProgressCallback | None, counters: dict, message: str) -> None:
+    def _emit(
+        progress: ProgressCallback | None,
+        counters: dict,
+        message: str,
+    ) -> None:
         if progress is not None:
             progress(MiningStats(**counters), message)
 
@@ -329,7 +440,11 @@ class CorpusMiner:
 def _gpu_utilization_percent() -> int | None:
     try:
         proc = subprocess.run(
-            ["nvidia-smi", "--query-gpu=utilization.gpu", "--format=csv,noheader,nounits"],
+            [
+                "nvidia-smi",
+                "--query-gpu=utilization.gpu",
+                "--format=csv,noheader,nounits",
+            ],
             capture_output=True,
             text=True,
             timeout=2,
