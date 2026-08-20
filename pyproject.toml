@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "character-mosaic-censor"
-version = "1.0.0"
+version = "1.0.1"
 description = "Local Windows GUI for recall-oriented censoring of sensitive regions in anime/CG images"
 readme = "README.md"
 license = {file = "LICENSE"}
