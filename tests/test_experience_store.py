@@ -3,6 +3,7 @@ from __future__ import annotations
 from PIL import Image
 
 from character_mosaic.anatomy_filter import AnatomyFilterResult
+from character_mosaic.experience_recorder import record_process_experience
 from character_mosaic.experience_store import (
     ExperienceStore,
     candidate_fingerprint,
@@ -10,7 +11,7 @@ from character_mosaic.experience_store import (
     fingerprint_hamming,
 )
 from character_mosaic.negative_memory import apply_negative_memory
-from character_mosaic.types import CandidateEvidence, Detection
+from character_mosaic.types import CandidateEvidence, Detection, ProcessResult
 
 
 def _negative_evidence(box=(10, 10, 30, 30)):
@@ -73,6 +74,57 @@ def test_store_deduplicates_source_hash_and_counts_candidates(tmp_path):
     assert stats["sources"] == 1
     assert stats["candidates"] == 1
     assert stats["candidate_negative_gold"] == 1
+
+
+def test_normal_rerun_replaces_stale_candidate_evidence(tmp_path):
+    source = tmp_path / "source.png"
+    Image.new("RGB", (80, 80), (150, 120, 110)).save(source)
+    store = ExperienceStore(tmp_path / "experience.sqlite3")
+    detection = Detection((20, 20, 40, 40), "pussy", 0.80, "full")
+
+    old_evidence = CandidateEvidence(
+        detection=detection,
+        decision="suppress",
+        negative_signals=("inside_upper_back:p0:1.000",),
+        matched_persons=(0,),
+        pelvis_distance_ratio=1.1,
+    )
+    old_result = ProcessResult(
+        source=source,
+        output=None,
+        detections=tuple(),
+        review_required=False,
+        anatomy_suppressed=(detection,),
+        anatomy_suppression_reasons=("inside_upper_back",),
+        candidate_evidence=(old_evidence,),
+    )
+    record_process_experience(source, old_result, store=store, save_crops=False)
+    assert store.stats()["candidate_negative_gold"] == 1
+
+    new_evidence = CandidateEvidence(
+        detection=detection,
+        decision="keep",
+        positive_signals=("near_pelvis:p0:0.20",),
+        matched_persons=(0,),
+        pelvis_distance_ratio=0.20,
+    )
+    new_result = ProcessResult(
+        source=source,
+        output=None,
+        detections=(detection,),
+        review_required=False,
+        candidate_evidence=(new_evidence,),
+    )
+    record_process_experience(source, new_result, store=store, save_crops=False)
+
+    with store.connect() as db:
+        rows = db.execute(
+            "SELECT pseudo_label,quality_tier FROM candidates"
+        ).fetchall()
+    assert len(rows) == 1
+    assert rows[0]["pseudo_label"] == "positive_seed"
+    assert rows[0]["quality_tier"] == "silver"
+    assert store.stats().get("candidate_negative_gold", 0) == 0
 
 
 def test_ambiguous_keep_goes_to_quarantine():
