@@ -2,16 +2,17 @@
 
 **Character Mosaic Censor** is a Windows desktop application that automatically detects and censors sensitive anatomical regions in anime, CG, and AI-generated character images. Processing is performed locally on your PC, with a review workflow for uncertain or suspicious results.
 
-**Version:** 1.1.0  
+**Version:** 1.2.0  
 **Platform:** Windows 10 / 11  
 **Recommended:** Python 3.11 + NVIDIA GPU
 
 ## Features
 
 - PySide6 desktop GUI with Japanese / English display switching
-- Large live preview for original, detected, and censored images
+- Large live preview for original, detected, **body-analysis**, and censored images
 - Anime/CG detection powered by `dghs-imgutils`
-- Automatic anatomy-aware false-positive suppression for obvious knee/armpit detections
+- Multi-signal body-region reasoning using person/head/face/eye BBoxes plus DWPose body keypoints
+- Candidate-level `KEEP` / `REVIEW` / `SUPPRESS` decisions with visible evidence
 - Full-frame detection plus large-image tiled inference and retry passes
 - Mosaic / Blur / Black censor modes
 - Low-confidence Review output and manual-review quarantine for suspicious detections
@@ -28,7 +29,7 @@
 3. Run **`START_HERE.bat`**.
 4. On the first launch, the GPU environment is created in `.venv`; after setup, the GUI starts.
 
-Windows may display an **Unknown publisher / Open File - Security Warning** for the batch files because they are not code-signed. If you downloaded this repository from the official GitHub page and trust the copy, choose **Run**.
+`START_HERE.bat` reads the current application version directly from `pyproject.toml`, so the displayed version stays synchronized with releases.
 
 If the GUI does not open, check `startup_error.log` in the repository folder or run `diagnose.bat` from a terminal.
 
@@ -38,35 +39,57 @@ If the GUI does not open, check `startup_error.log` in the repository folder or 
 2. Leave the output lock off to automatically use `<input>\_censored`, or lock/select a custom output folder when needed.
 3. Adjust censor mode or detection settings only when necessary.
 4. Click **Run**.
-5. Check Review/manual-review items before publishing or distributing the results.
+5. Use **Body analysis** in the preview to inspect detected people/body parts and candidate decisions.
+6. Check Review/manual-review items before publishing or distributing the results.
 
 Supported input formats include PNG, JPEG, and WebP.
 
-## Automatic anatomy check
+## Body-region reasoning
 
-Version 1.1 adds a conservative second check for detector candidates using the anime-oriented person detector and DWPose support already available through `dghs-imgutils`.
+Version 1.2 expands the anatomy check into a body-region reasoning layer. The normal censor detector still runs first. For every candidate, the application can then gather additional evidence from:
 
-The normal censor detector still runs first. When it finds a candidate, the anatomy check may use detected people plus shoulder/hip/knee keypoints to reject an obvious body-position false positive. A candidate is removed only when it is reliably near a knee or armpit and clearly separated from the pelvis.
+- anime person BBoxes,
+- head BBoxes,
+- face BBoxes,
+- eye BBoxes,
+- DWPose shoulder/hip/knee and other body keypoints,
+- derived pelvis-safe, knee, and armpit regions,
+- the original detector confidence and inference source.
 
-The anatomy check is intentionally **fail-open** to protect recall. The original detector result is kept when:
+The body layer does **not** treat a face, head, knee, or any other body part as an unconditional exclusion zone. Candidate evidence is combined into one of three decisions:
 
-- no reliable person or pose is found,
-- both hips cannot be located reliably,
-- the candidate remains plausibly close to the pelvis,
-- multiple overlapping people make the body assignment ambiguous, or
-- the helper model/dependency cannot load.
+- **KEEP** — retain the candidate and censor it.
+- **REVIEW** — retain/censor it, but route the image through Review because the body evidence is ambiguous.
+- **SUPPRESS** — remove only a strong hard-negative candidate.
 
-If the helper cannot load, it is disabled for the rest of that batch instead of repeatedly failing. Normal censor detection continues.
+### Recall-first safety rules
 
-The first run that needs this check may download additional upstream person/pose model files. Images are still processed locally; only upstream model files may be downloaded.
+- A candidate near a reliable pelvis is protected.
+- Pelvis evidence from **another person** can protect a candidate even if it overlaps a different person's face/head. This is important for close-contact and oral compositions.
+- Face/head overlap by itself is never enough to auto-suppress. It becomes a Review signal.
+- A strongly confirmed eye+face+head overlap can be suppressed as an obvious facial false positive.
+- Knee/armpit suppression is used only when reliable pose evidence agrees and the candidate is clearly separated from the pelvis.
+- Missing or weak body information keeps the original detector result.
+- If an auxiliary helper model fails, that helper is disabled for the rest of the batch and processing continues with the remaining evidence.
 
-For troubleshooting, set the environment variable `CMC_ANATOMY_FILTER=0` before launch to disable this extra check and return to the v1.0 detector behavior.
+For troubleshooting, set `CMC_ANATOMY_FILTER=0` before launch to disable the extra body reasoning and return to the base detector behavior.
 
-JSONL logs record `anatomy_filter_status`, any `anatomy_suppressed` boxes, and the corresponding suppression reasons. The GUI also shows the number of candidates removed by the anatomy check.
+The first run that needs a helper may download additional upstream person/head/face/eye/pose model files. Images are still processed locally; only upstream model files may be downloaded.
+
+## Body analysis preview
+
+The **Body analysis** view can display:
+
+- person, head, face, and eye BBoxes,
+- pose skeleton lines and keypoints,
+- pelvis-safe, knee, and armpit regions,
+- candidate BBoxes colored by `KEEP`, `REVIEW`, or `SUPPRESS`.
+
+Click a candidate in this view to see its positive and negative evidence. JSONL logs also record `anatomy_filter_status`, `body_regions`, `pose_points`, `pose_edges`, `candidate_evidence`, suppressed candidates, and suppression reasons.
 
 ## Review behavior
 
-The detector is intentionally recall-oriented, but no automatic detector is perfect. Low-confidence detections can be written to a Review folder, and suspicious detection-count results can be isolated for manual checking.
+The detector is intentionally recall-oriented, but no automatic detector is perfect. Low-confidence detections and body-analysis `REVIEW` decisions can be written to a Review folder, and suspicious detection-count results can be isolated for manual checking.
 
 For important batches, review the uncertain images before considering the output final. False positives and missed regions are both possible, especially with unusual poses, occlusion, very small targets, or images outside the detector's training distribution.
 
@@ -80,7 +103,7 @@ diagnose.bat
 run.bat
 ```
 
-`install_gpu.bat` creates a local `.venv` and installs the GPU dependencies. The first detector/anatomy-check run may download upstream model data if it is not already cached.
+`install_gpu.bat` creates a local `.venv` and installs the GPU dependencies. The first detector/body-analysis run may download upstream model data if it is not already cached.
 
 To test the actual model load:
 
