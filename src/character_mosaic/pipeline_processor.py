@@ -9,6 +9,7 @@ from PIL import Image
 
 from .detector import AnimeCensorDetector, DetectorConfig
 from .image_ops import apply_mosaic, draw_review_overlay, expand_box, normalize_image
+from .i18n import t
 from .pipeline_config import PipelineConfig
 from .pipeline_review import (
     _load_review_manifest,
@@ -93,10 +94,15 @@ class BatchProcessor:
             relative = src.resolve().relative_to(input_dir)
             dst = output_dir / relative
             review_path = (review_dir / relative) if review_dir else None
+            manual_root = output_dir / "_manual_review"
+            manual_path = manual_root / "original" / relative
+            manual_annotated = manual_root / "annotated" / relative
             result = self.process_file(
                 src,
                 dst,
                 review_path,
+                manual_review_copy=manual_path,
+                manual_review_annotated=manual_annotated,
                 preview=preview,
                 stop_requested=stop_requested,
             )
@@ -120,6 +126,8 @@ class BatchProcessor:
         source: Path,
         output: Path,
         review_copy: Path | None = None,
+        manual_review_copy: Path | None = None,
+        manual_review_annotated: Path | None = None,
         preview: PreviewCallback | None = None,
         stop_requested: Callable[[], bool] | None = None,
     ) -> ProcessResult:
@@ -139,7 +147,11 @@ class BatchProcessor:
                         "original",
                         source,
                         detector_preview.copy(),
-                        status=f"画像を読み込みました  {image.width}×{image.height}",
+                        status=t(
+                            self.config.language,
+                            f"画像を読み込みました  {image.width}×{image.height}",
+                            f"Image loaded  {image.width}×{image.height}",
+                        ),
                         coordinate_size=coordinate_size,
                     )
                 )
@@ -164,7 +176,7 @@ class BatchProcessor:
                         detector_preview.copy(),
                         detections=interim,
                         censor_boxes=boxes,
-                        status=f"AI解析中: {pass_name}",
+                        status=t(self.config.language, f"AI解析中: {pass_name}", f"Analyzing: {pass_name}"),
                         coordinate_size=coordinate_size,
                     )
                 )
@@ -182,6 +194,7 @@ class BatchProcessor:
                     elapsed_seconds=time.perf_counter() - started,
                 )
             boxes = self._expanded_boxes(detections, coordinate_size)
+            count_mismatch = len(detections) != self.config.expected_person_count
             if stop_requested and stop_requested():
                 if preview:
                     preview(
@@ -191,7 +204,11 @@ class BatchProcessor:
                             detector_preview.copy(),
                             detections=tuple(detections),
                             censor_boxes=tuple(boxes),
-                            status="停止: この画像は保存しません",
+                            status=t(
+                                self.config.language,
+                                "停止: この画像は保存しません",
+                                "Stopped: this incomplete image was not saved",
+                            ),
                             coordinate_size=coordinate_size,
                         )
                     )
@@ -212,7 +229,19 @@ class BatchProcessor:
                         detector_preview.copy(),
                         detections=tuple(detections),
                         censor_boxes=tuple(boxes),
-                        status=f"検出完了: {len(detections)}件",
+                        status=(
+                            t(
+                                self.config.language,
+                                f"検出完了: {len(detections)}件",
+                                f"Detection complete: {len(detections)}",
+                            )
+                            if not count_mismatch
+                            else t(
+                                self.config.language,
+                                f"要手動確認: 人数 {self.config.expected_person_count} / 検出 {len(detections)}",
+                                f"Manual review: expected {self.config.expected_person_count} / detected {len(detections)}",
+                            )
+                        ),
                         coordinate_size=coordinate_size,
                     )
                 )
@@ -237,7 +266,7 @@ class BatchProcessor:
                         _make_preview_image(censored, self.config.preview_max_side),
                         detections=tuple(detections),
                         censor_boxes=tuple(boxes),
-                        status="モザイク適用後",
+                        status=t(self.config.language, "モザイク適用後", "Censor effect applied"),
                         coordinate_size=coordinate_size,
                     )
                 )
@@ -258,6 +287,25 @@ class BatchProcessor:
                 )
                 saved_review = review_copy
 
+            saved_manual: Path | None = None
+            if manual_review_copy and count_mismatch:
+                manual_review_copy.parent.mkdir(parents=True, exist_ok=True)
+                _copy_file_atomic(source, manual_review_copy)
+                saved_manual = manual_review_copy
+                if manual_review_annotated:
+                    manual_review_annotated.parent.mkdir(parents=True, exist_ok=True)
+                    annotated = draw_review_overlay(image, detections, boxes, no_detection=not detections)
+                    _save_image_atomic(
+                        annotated,
+                        manual_review_annotated,
+                        source.suffix.lower(),
+                        jpeg_quality=self.config.jpeg_quality,
+                    )
+            elif manual_review_copy:
+                manual_review_copy.unlink(missing_ok=True)
+                if manual_review_annotated:
+                    manual_review_annotated.unlink(missing_ok=True)
+
             return ProcessResult(
                 source,
                 output,
@@ -265,6 +313,8 @@ class BatchProcessor:
                 review_required,
                 censor_boxes=tuple(boxes),
                 review_path=saved_review,
+                count_mismatch=count_mismatch,
+                manual_review_path=saved_manual,
                 elapsed_seconds=time.perf_counter() - started,
             )
         except Exception as exc:

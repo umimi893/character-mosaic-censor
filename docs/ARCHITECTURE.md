@@ -11,7 +11,7 @@ MainWindow
           ├─ AnimeCensorDetector
           │   ├─ full-frame inference
           │   ├─ optional 2x2 / 3x3 overlapping tiles
-          │   ├─ optional horizontal-flip TTA
+          │   ├─ zero-result flip / rotation retries
           │   └─ cross-pass box union/merge
           ├─ censor image operation
           ├─ review manifest / HTML
@@ -41,11 +41,12 @@ The default detector is `dghs-imgutils` `detect_censors` using the standard `s` 
 
 1. Run a full-frame pass.
 2. For sufficiently large images, run overlapping tiled passes.
-3. Optionally repeat each pass on a horizontally flipped image.
-4. Convert every detection back into the original image coordinate system.
+3. If the normal pass set has no target detections, retry full-frame inference with horizontal/vertical flips and 90/180/270-degree rotations.
+4. Convert every retry detection back into the original image coordinate system.
 5. Merge detections that overlap strongly by IoU or intersection-over-smaller-box.
 6. Use the union of matching boxes rather than discarding the wider alternative.
 7. Expand the final censor area by fixed pixels plus a ratio of the detected box size.
+8. Compare the final target count with the user-specified expected people count and quarantine mismatches.
 
 This intentionally makes censor coverage conservative.
 

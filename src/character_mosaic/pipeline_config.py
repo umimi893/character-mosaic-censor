@@ -6,6 +6,8 @@ from .detector import DetectorConfig
 
 @dataclass
 class PipelineConfig:
+    language: str = "ja"
+    expected_person_count: int = 1
     detection_threshold: float = 0.12
     auto_threshold: float = 0.30
     padding_px: int = 12
@@ -33,6 +35,10 @@ class PipelineConfig:
     jpeg_quality: int = 95
 
     def validate(self) -> None:
+        if self.language not in {"ja", "en"}:
+            raise ValueError("Language must be 'ja' or 'en'.")
+        if not 1 <= self.expected_person_count <= 20:
+            raise ValueError("画像内の人数は 1〜20 人で指定してください。")
         if not 0.0 < self.detection_threshold < 1.0:
             raise ValueError("Confidence は 0 より大きく 1 未満にしてください。")
         if not self.detection_threshold <= self.auto_threshold < 1.0:

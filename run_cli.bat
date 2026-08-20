@@ -1,8 +1,9 @@
 @echo off
+chcp 65001 >nul
 setlocal
 cd /d "%~dp0"
 if not exist .venv\Scripts\python.exe (
-  echo 先に install.bat を実行してください。
+  echo Run install_gpu.bat or install.bat first.
   exit /b 1
 )
 .venv\Scripts\python.exe -m character_mosaic.cli %*

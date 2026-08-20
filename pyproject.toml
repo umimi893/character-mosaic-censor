@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "character-mosaic-censor"
-version = "0.3.1"
+version = "0.4.0"
 description = "Local Windows GUI for recall-oriented censoring of sensitive regions in anime/CG images"
 readme = "README.md"
 keywords = ["anime", "image-processing", "computer-vision", "onnx", "pyside6", "mosaic"]

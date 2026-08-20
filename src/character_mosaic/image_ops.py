@@ -38,7 +38,7 @@ def apply_mosaic(
     block_size: int = 16,
     mode: str = "mosaic",
 ) -> Image.Image:
-    """Apply a censor effect to boxes on a copy of the image."""
+    """Apply a censor effect through an oval mask inside each detector box."""
     out = image.copy()
     block_size = max(2, int(block_size))
 
@@ -60,11 +60,11 @@ def apply_mosaic(
             patch = region.resize((small_w, small_h), Image.Resampling.BILINEAR)
             patch = patch.resize(region.size, Image.Resampling.NEAREST)
 
-        # Replace pixels instead of alpha-compositing them back over the
-        # source. Alpha-compositing an RGBA patch derived from the source can
-        # increase semi-transparent alpha values (e.g. 128 -> 192), which is
-        # an unintended image change outside the censor effect itself.
-        out.paste(patch, (x0, y0))
+        # The detector only supplies a box, not a segmentation outline. An
+        # antialiased oval mask follows the target's usual compact shape and
+        # avoids censoring all four corners of the expanded rectangle.
+        mask = _oval_mask(region.size)
+        out.paste(patch, (x0, y0), mask)
     return out
 
 
@@ -81,7 +81,7 @@ def draw_review_overlay(
     line_width = max(2, round(max(out.size) / 600))
 
     for box in censor_boxes:
-        draw.rectangle(box, outline=(255, 170, 0, 220), width=line_width)
+        draw.ellipse(box, outline=(255, 170, 0, 220), width=line_width)
 
     for det in detections:
         x0, y0, x1, y1 = det.box
@@ -103,6 +103,18 @@ def draw_review_overlay(
         draw.text((16, 12), label, fill=(255, 255, 255, 255))
 
     return out
+
+
+def _oval_mask(size: tuple[int, int], scale: int = 4) -> Image.Image:
+    width, height = size
+    scale = max(1, int(scale))
+    mask = Image.new("L", (max(1, width * scale), max(1, height * scale)), 0)
+    draw = ImageDraw.Draw(mask)
+    draw.ellipse((0, 0, mask.width - 1, mask.height - 1), fill=255)
+    if scale > 1:
+        mask = mask.resize((width, height), Image.Resampling.LANCZOS)
+        mask = mask.point(lambda value: 255 if value >= 250 else value)
+    return mask
 
 
 def _black_for_mode(mode: str):

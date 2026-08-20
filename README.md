@@ -2,16 +2,18 @@
 
 **Character Mosaic Censor** is a Windows desktop application for automatically detecting and censoring sensitive anatomical regions in anime, CG, and AI-generated character images. Processing stays local, and the application is designed around **recall-first detection**: uncertain candidates can still be censored and routed to a review queue instead of being silently ignored.
 
-> **Status:** v0.3.1 / pre-release candidate. Core processing and regression tests are validated locally; final Windows + RTX 5090 + real-image recall validation is still required before calling the detector production-ready.
+> **Status:** v0.4.0 / pre-release candidate. Core processing and regression tests are validated locally; representative-image recall validation is still required before calling the detector production-ready.
 
 ## Highlights
 
 - Native-looking desktop GUI built with **PySide6**
+- Live Japanese / English UI switching with a persisted language choice
 - Large live preview showing the image, detector boxes, confidence, and censor region
 - `QThread` worker so inference does not freeze the UI
 - `dghs-imgutils` `detect_censors` as the default anime/CG detector
 - Full-frame + overlapping 2x2 / 3x3 tiled inference
-- Optional horizontal-flip TTA
+- Zero-detection fallback using horizontal/vertical flips and 90/180/270-degree rotations
+- Expected-person count checks with a dedicated manual-review quarantine
 - Recall-oriented cross-pass box union/merge
 - Mosaic / Blur / Black censor modes
 - Low-confidence Review queue with persistent HTML report
@@ -20,6 +22,7 @@
 - Atomic writes and metadata preservation where supported
 - CPU and NVIDIA CUDA/ONNX Runtime diagnostics
 - CLI entry point using the same processing pipeline
+- Console-free GUI launch through `run.bat`
 - No GitHub Actions dependency; validation is local by design
 
 ## Application layout
@@ -43,6 +46,8 @@ The desktop UI uses a preview-first layout:
 
 The preview can switch between **Original / Detection / Censored**, and BBox overlays can be toggled independently.
 
+The right-side language selector switches the visible UI between Japanese and English immediately. Advanced settings are grouped into Basic, Large images, and Duplicate merging tabs, with an explanation under every non-obvious option.
+
 For large images, the preview copy is downscaled while all detection coordinates remain in the source image coordinate system. This avoids sending a full 3K/8K image through Qt after every detector pass.
 
 ## Detection strategy
@@ -56,6 +61,7 @@ The application currently filters to the detector's female genital-region class 
 | Setting | Default |
 |---|---:|
 | Detection confidence | `0.12` |
+| Expected people per image | `1` |
 | Review threshold | `0.30` |
 | Model | `v1.0 / standard(s)` |
 | Model NMS IoU | `0.70` |
@@ -63,7 +69,7 @@ The application currently filters to the detector's female genital-region class 
 | 2x2 tiled inference | long side `>= 1200px` |
 | 3x3 tiled inference | long side `>= 3000px` |
 | Tile overlap | `16%` |
-| Horizontal flip TTA | ON |
+| Flip/rotation retry after zero detections | ON |
 | Cross-pass merge IoU | `0.45` |
 | Cross-pass nested IoS | `0.70` |
 
@@ -88,6 +94,11 @@ The GUI supports:
 - **Black**
 
 The censor region is expanded beyond the raw detector box using both a fixed pixel margin and a box-size ratio margin.
+Because the detector provides boxes rather than segmentation contours, effects are applied through an antialiased oval mask inside each expanded box instead of filling all four corners.
+
+## Detection-count mismatch workflow
+
+The GUI accepts the expected number of people per image. If the final `pussy` detection count differs after all retries, the source is copied to `<output>/_manual_review/original/` and an annotated reference is written to `<output>/_manual_review/annotated/`. This quarantine is created independently of the normal confidence-based Review setting.
 
 ## Review workflow
 
@@ -197,6 +208,8 @@ The GUI is the primary interface, but the same pipeline is available from the co
 run_cli.bat "D:\input" "D:\output" --review "D:\review"
 ```
 
+The output argument may be omitted; in that case `D:\input\_censored` is created automatically. Use `--people N` to set the expected people count.
+
 Example with more aggressive recall settings:
 
 ```bat
@@ -290,7 +303,7 @@ Detector quality cannot be honestly declared complete without testing against th
 
 ## Validation status
 
-Current source-level regression validation includes **36 tests** plus compile and diff checks. The remaining release gate is real Windows/NVIDIA execution and representative-image recall evaluation.
+Current source-level regression validation includes **48 tests** plus compile checks. Windows GUI startup, console-free launch, language switching, and an RTX 5090 model inference pass are verified; representative-image recall evaluation remains required.
 
 See [`VALIDATION.md`](VALIDATION.md) for the exact boundary between verified behavior and pending hardware/model validation.
 
