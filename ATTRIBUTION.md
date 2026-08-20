@@ -6,37 +6,52 @@ Character Mosaic Censor contains original application/integration code and does 
 
 - Project: `deepghs/imgutils`
 - Upstream: https://github.com/deepghs/imgutils
-- Purpose: anime/CG object detection, person detection, DWPose integration, and ONNX inference
+- Purpose: anime/CG censor, person, head, face, eye, pose, and ONNX inference integration
 - Version pinned by this project: `0.19.0`
 - Upstream license: MIT License
-- Upstream authors include narugo1992 and 7eu7d7
-
-The upstream project metadata and GitHub repository identify `dghs-imgutils` as MIT-licensed.
 
 ## anime_censor_detection model
 
 - Model repository: `deepghs/anime_censor_detection`
 - Upstream: https://huggingface.co/deepghs/anime_censor_detection
 - Default model used by this application: `censor_detect_v1.0_s`
-- Upstream model-repository license: MIT
-
-Model weights are downloaded/cached by the upstream stack and are intentionally excluded from this repository.
 
 ## Anime person detection model
 
 - Model repository used by `imgutils.detect.detect_person`: `deepghs/anime_person_detection`
 - Upstream: https://huggingface.co/deepghs/anime_person_detection
-- Purpose in Character Mosaic Censor: obtain per-person bounding boxes for the optional anatomy sanity check
-- Default model requested by v1.1: `person_detect_v1.1_s`
+- Purpose: per-person BBoxes for body-region reasoning
+- Default model requested by v1.2: `person_detect_v1.1_m`
 
-The model is downloaded/cached by `dghs-imgutils`; no person-detection model weights are committed to this repository. Redistribution must follow the upstream model repository's applicable terms.
+## Anime head detection model
+
+- Model repository used by `imgutils.detect.detect_heads`: `deepghs/anime_head_detection`
+- Upstream: https://huggingface.co/deepghs/anime_head_detection
+- Purpose: head-region evidence and visualization
+- Default model requested by the pinned upstream implementation: `head_detect_v2.0_s`
+
+## Anime face detection model
+
+- Model repository used by `imgutils.detect.detect_faces`: `deepghs/anime_face_detection`
+- Upstream: https://huggingface.co/deepghs/anime_face_detection
+- Purpose: face-region evidence and visualization
+- Default model requested by v1.2: `face_detect_v1.4_s`
+
+## Anime eye detection model
+
+- Model repository used by `imgutils.detect.detect_eyes`: `deepghs/anime_eye_detection`
+- Upstream: https://huggingface.co/deepghs/anime_eye_detection
+- Purpose: strong facial hard-negative confirmation and visualization
+- Default model requested by v1.2: `eye_detect_v1.0_s`
+
+The detector models above are downloaded/cached by `dghs-imgutils`; no corresponding model weights are committed to this repository. Redistribution must follow each upstream model repository's applicable terms.
 
 ## DWPose model
 
 - Model integration: `imgutils.pose.dwpose_estimate`
 - Model repository requested by `dghs-imgutils`: `yzd-v/DWPose`
 - Default model file requested by the pinned upstream implementation: `dw-ll_ucoco_384.onnx`
-- Purpose in Character Mosaic Censor: estimate shoulder, hip, and knee keypoints used only as a conservative false-positive sanity check
+- Purpose: visible skeleton, pelvis protection, and conservative knee/armpit evidence
 
 The DWPose model is downloaded/cached by the upstream stack and is not included in this repository. Redistribution must follow the upstream model repository's applicable terms.
 
