@@ -9,7 +9,7 @@ from .types import BodyRegion, CandidateEvidence, Detection, PosePoint
 
 
 # Geometry v2 deliberately uses only pose landmarks that are already available
-# from DWPose.  No new model dependency is introduced here.
+# from DWPose. No new model dependency is introduced here.
 _MIN_SCORE = 0.45
 _TORSO_SAMPLE_THRESHOLD = 0.67
 _LIMB_TUBE_RATIO = 0.16
@@ -56,7 +56,9 @@ def apply_body_geometry_v2(
     """Suppress obvious torso/armpit/leg false positives using pose geometry.
 
     Safety rules:
-    * a candidate inside any reliable groin-positive zone is protected;
+    * a candidate inside any reliable directional groin zone is protected;
+    * pelvis evidence from another person always wins for close-contact scenes;
+    * unmatched candidates fail open;
     * overlapping-person scenes fail open unless every matched usable person
       independently classifies the candidate as a hard-negative body region;
     * missing shoulders/hips/knees simply removes that geometry signal.
@@ -80,13 +82,29 @@ def apply_body_geometry_v2(
             evidence_out.append(evidence)
             continue
 
-        matched = tuple(evidence.matched_persons)
-        candidate_people = list(matched) if matched else list(people)
+        matched = tuple(idx for idx in evidence.matched_persons if idx in people)
+        # No reliable person association means the geometry is not entitled to
+        # veto the base detector.
+        if not matched:
+            evidence_out.append(evidence)
+            kept.append(detection)
+            continue
 
-        # A plausible groin location from any person wins before hard-negative
-        # geometry.  The zone is directional (below the hip line), unlike the
-        # older circular pelvis distance check, so lower-back points are not
-        # accidentally protected merely because they are near the hips.
+        pelvis_people = _signal_people(evidence.positive_signals, "near_pelvis")
+        if any(person not in matched for person in pelvis_people):
+            # Preserve the important oral/close-contact case where a candidate
+            # overlaps one person's body but is plausibly near another person's
+            # pelvis.
+            evidence_out.append(evidence)
+            kept.append(detection)
+            continue
+
+        candidate_people = list(matched)
+
+        # A plausible groin location from any matched person wins before
+        # hard-negative geometry. The zone is directional (below the hip line),
+        # unlike the older circular pelvis distance check, so lower-back points
+        # are not accidentally protected merely because they are near the hips.
         groin_hits = [
             person_index
             for person_index in candidate_people
@@ -107,9 +125,9 @@ def apply_body_geometry_v2(
             assessments.append((person_index, reason, strength))
 
         usable = [item for item in assessments if item[1] is not None]
-        # For an explicitly matched multi-person candidate, require agreement
-        # from every person.  One unknown person means fail-open.
-        if matched and len(usable) != len(candidate_people):
+        # For a multi-person candidate, require agreement from every matched
+        # person. One unknown person means fail-open.
+        if len(usable) != len(candidate_people):
             evidence_out.append(evidence)
             kept.append(detection)
             continue
@@ -173,7 +191,7 @@ def _classify_hard_negative(
         fraction = _box_sample_fraction_in_polygon(box, torso)
         if fraction >= _TORSO_SAMPLE_THRESHOLD:
             # Upper torso is where shoulder-blade/back false positives are most
-            # common.  Lower torso is still a hard-negative as long as the
+            # common. Lower torso is still a hard-negative as long as the
             # directional groin zone did not protect it above.
             shoulder_y = (rs[1] + ls[1]) / 2.0
             hip_y = (rh[1] + lh[1]) / 2.0
@@ -195,7 +213,7 @@ def _classify_hard_negative(
             d = _point_box_distance(armpit, box)
             if d <= radius:
                 # If an elbow is available, require the arm to actually leave
-                # the shoulder by a meaningful distance.  This reduces phantom
+                # the shoulder by a meaningful distance. This reduces phantom
                 # armpit zones on broken poses.
                 if elbow is None or _distance(shoulder, elbow) >= scale * 0.28:
                     return f"near_{side}_armpit_v2", max(0.0, 1.0 - d / max(1.0, radius))
@@ -327,6 +345,20 @@ def _point_in_polygon(point: tuple[float, float], polygon: Sequence[tuple[float,
                 inside = not inside
         j = i
     return inside
+
+
+def _signal_people(signals: Sequence[str], prefix: str) -> set[int]:
+    people: set[int] = set()
+    needle = prefix + ":p"
+    for signal in signals:
+        if not signal.startswith(needle):
+            continue
+        person_text = signal[len(needle):].split(":", 1)[0]
+        try:
+            people.add(int(person_text))
+        except ValueError:
+            continue
+    return people
 
 
 def _point_segment_distance(point, start, end) -> float:
