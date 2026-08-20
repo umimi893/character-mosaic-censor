@@ -43,6 +43,7 @@ def _enhanced_humanize_signal(signal, language):
             "on_left_thigh": "左太もも上",
             "on_right_lower_leg": "右脚上",
             "on_left_lower_leg": "左脚上",
+            "negative_memory": "過去の高信頼誤検出と近似一致",
         }
         if prefix in mapping:
             return f"{mapping[prefix]}:{rest}" if sep else mapping[prefix]
