@@ -16,6 +16,7 @@ from .body_geometry import GeometryV2Detector
 from .body_reasoning import BodyReasoningDetector
 from .experience_recorder import record_process_experience
 from .i18n import t
+from .negative_memory import NegativeMemoryDetector
 from .pipeline_config import PipelineConfig
 from .pipeline_logging import JsonlRunLogger, write_jsonl_log
 from .pipeline_processor import BatchProcessor as _BatchProcessor
@@ -24,21 +25,20 @@ from .pipeline_review import write_review_html
 
 
 class BatchProcessor(_BatchProcessor):
-    """Batch processor with public UX/safety policy layers.
-
-    The default detector is wrapped by body-region reasoning and geometry v2.
-    Geometry v2 adds pose-aligned torso/armpit/thigh/lower-leg suppression while
-    keeping a directional groin-positive region and multi-person fail-open rules.
-    """
+    """Batch processor with body geometry and persistent negative memory."""
 
     def __init__(self, config: PipelineConfig | None = None, detector=None):
         super().__init__(config=config, detector=detector)
-        if detector is None and not isinstance(self.detector, GeometryV2Detector):
+        if detector is None:
             body = BodyReasoningDetector(
                 self.detector,
                 AnatomyFilterConfig(enabled=self.config.anatomy_filter),
             )
-            self.detector = GeometryV2Detector(body)
+            geometry = GeometryV2Detector(body)
+            self.detector = NegativeMemoryDetector(
+                geometry,
+                enabled=bool(getattr(self.config, "learning_enabled", True)),
+            )
 
     def _reset_anatomy_diagnostics(self) -> None:
         reset = getattr(self.detector, "reset_filter_state", None)
