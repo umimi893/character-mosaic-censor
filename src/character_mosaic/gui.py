@@ -7,6 +7,7 @@ def main() -> int:
     try:
         from .ui import main_window
         from .ui.output_follow import OutputFollowControlPanel
+        from .ui.theme import DARK_STYLE
         from .ui.ux_enhancements import EnhancedMainWindow
     except ImportError as exc:
         if exc.name and exc.name.startswith("PySide6"):
@@ -14,9 +15,12 @@ def main() -> int:
         raise
 
     # Keep the existing worker implementation intact and layer UX behavior over
-    # the stable window/panel classes.
+    # the stable window/panel classes. Replace the legacy partial stylesheet with
+    # a complete one so Windows light mode cannot leak white native backgrounds
+    # into the dark application UI.
     main_window.ControlPanel = OutputFollowControlPanel
     main_window.MainWindow = EnhancedMainWindow
+    main_window._STYLE = DARK_STYLE
     return main_window.main()
 
 
