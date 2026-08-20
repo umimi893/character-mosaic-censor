@@ -22,7 +22,8 @@ class _FakeMiner:
 
 
 def test_worker_applies_max_images_across_all_roots(tmp_path, monkeypatch):
-    QCoreApplication.instance() or QCoreApplication([])
+    app = QCoreApplication.instance() or QCoreApplication([])
+    assert app is not None
     _FakeMiner.limits = []
     monkeypatch.setattr(worker_module, "CorpusMiner", _FakeMiner)
 
