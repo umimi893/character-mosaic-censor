@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.2.0
+
+Body-region reasoning and visual diagnostics.
+
+- Expanded the anatomy layer from knee/armpit checks into a multi-signal body-region map using person, head, face, eye, and DWPose body information.
+- Added candidate-level `KEEP`, `REVIEW`, and `SUPPRESS` evidence instead of treating one body part as an unconditional exclusion zone.
+- Added cross-person pelvis protection so a candidate overlapping one character's face is still kept when another character's pelvis provides strong positive evidence.
+- Added conservative face/head handling for oral and close-contact compositions: face/head overlap alone routes to Review and never auto-suppresses.
+- Added strong eye+face+head confirmation for obvious facial false positives.
+- Added a dedicated **Body analysis** preview mode with person/head/face/eye BBoxes, skeleton lines, pelvis/knee/armpit regions, and decision-colored candidate boxes.
+- Candidate boxes in Body analysis are clickable and show the positive/negative evidence used for the decision.
+- Added fail-open partial-helper handling: a failed auxiliary model is disabled for the rest of the batch while remaining body signals continue when possible.
+- Expanded JSONL diagnostics with body regions, pose points/edges, and per-candidate evidence.
+- Body-analysis Review decisions now participate in the normal Review workflow.
+- Bumped the public application version to 1.2.0; `START_HERE.bat` continues to read the version dynamically from `pyproject.toml`.
+
 ## 1.1.0
 
 Automatic anatomy-aware false-positive suppression.
