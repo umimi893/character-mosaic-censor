@@ -2,7 +2,7 @@
 
 **Character Mosaic Censor** is a Windows desktop application that automatically detects and censors sensitive anatomical regions in anime, CG, and AI-generated character images. Processing is performed locally on your PC, with a review workflow for uncertain or suspicious results.
 
-**Version:** 1.0.0  
+**Version:** 1.0.1  
 **Platform:** Windows 10 / 11  
 **Recommended:** Python 3.11 + NVIDIA GPU
 
@@ -34,7 +34,7 @@ If the GUI does not open, check `startup_error.log` in the repository folder or 
 ## Basic usage
 
 1. Select the folder containing source images.
-2. Choose an output folder, or use the automatically suggested `_censored` folder.
+2. By default the output follows the input as `<input>\_censored`. Enable **Lock output folder** if you want to keep one custom output path while changing inputs.
 3. Adjust censor mode or detection settings only when necessary.
 4. Click **Run**.
 5. Check Review/manual-review items before publishing or distributing the results.
