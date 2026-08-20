@@ -7,14 +7,16 @@ def main() -> int:
     try:
         from .ui import main_window
         from .ui.settings_safety import EnhancedControlPanel
+        from .ui.ux_enhancements import EnhancedMainWindow
     except ImportError as exc:
         if exc.name and exc.name.startswith("PySide6"):
             raise RuntimeError("PySide6 がありません。install.bat を実行してください。") from exc
         raise
 
-    # Keep the existing window/worker implementation intact and replace only
-    # the settings panel with the wheel-safe, explicitly persistent variant.
+    # Keep the existing worker implementation intact and layer UX behavior over
+    # the stable window/panel classes.
     main_window.ControlPanel = EnhancedControlPanel
+    main_window.MainWindow = EnhancedMainWindow
     return main_window.main()
 
 

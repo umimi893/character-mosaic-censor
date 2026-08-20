@@ -33,6 +33,11 @@ class PipelineConfig:
     generate_review_html: bool = True
     preview_max_side: int = 1600
     jpeg_quality: int = 95
+    # Backward-compatible core default is exact matching. The GUI enables this
+    # so the person count acts as a maximum plausible number of detections:
+    # zero/no-target and partial visibility are normal, only excess detections
+    # are quarantined for manual review.
+    review_only_over_count: bool = False
 
     def validate(self) -> None:
         if self.language not in {"ja", "en"}:
