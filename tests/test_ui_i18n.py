@@ -57,6 +57,10 @@ def test_preview_labels_switch_language():
     _app()
     preview = PreviewWidget("ja")
     assert preview.original_btn.text() == "元画像"
+    assert preview.analysis_btn.text() == "人体解析"
+
     preview.set_language("en")
+
     assert preview.original_btn.text() == "Original"
+    assert preview.analysis_btn.text() == "Body analysis"
     assert preview.box_toggle.text() == "Show detection areas"
