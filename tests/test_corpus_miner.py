@@ -80,3 +80,61 @@ def test_miner_resumes_without_reprocessing_seen_material(tmp_path):
     assert second.processed == 0
     assert second.skipped == 1
     assert store.stats()["candidate_negative_gold"] == 1
+
+
+def test_default_mining_detector_disables_zero_result_tta():
+    detector = CorpusMiner._build_detector()
+    # GeometryV2Detector -> BodyReasoningDetector -> AnimeCensorDetector
+    base = detector.detector.detector
+    assert base.config.flip_tta is False
+    assert base.config.tile_large_images is True
+
+
+def test_miner_skips_oversized_file_before_decode(tmp_path):
+    root = tmp_path / "corpus"
+    root.mkdir()
+    raw = _png_bytes()
+    (root / "large.png").write_bytes(raw)
+    store = ExperienceStore(tmp_path / "experience.sqlite3")
+    miner = CorpusMiner(
+        CorpusMinerConfig(
+            include_zip=False,
+            idle_gpu_only=False,
+            save_crops=False,
+            max_file_bytes=max(1, len(raw) - 1),
+        ),
+        store=store,
+        detector=FakeMiningDetector(),
+    )
+
+    stats = miner.mine(root)
+    assert stats.discovered == 1
+    assert stats.processed == 0
+    assert stats.skipped == 1
+    assert store.stats()["source_skipped"] == 1
+
+
+def test_miner_skips_oversized_zip_member_before_read(tmp_path):
+    root = tmp_path / "corpus"
+    root.mkdir()
+    raw = _png_bytes()
+    with zipfile.ZipFile(root / "archive.zip", "w") as archive:
+        archive.writestr("large.png", raw)
+
+    store = ExperienceStore(tmp_path / "experience.sqlite3")
+    miner = CorpusMiner(
+        CorpusMinerConfig(
+            include_zip=True,
+            idle_gpu_only=False,
+            save_crops=False,
+            max_archive_member_bytes=max(1, len(raw) - 1),
+        ),
+        store=store,
+        detector=FakeMiningDetector(),
+    )
+    stats = miner.mine(root)
+
+    assert stats.discovered == 1
+    assert stats.processed == 0
+    assert stats.skipped == 1
+    assert store.stats()["source_skipped"] == 1
