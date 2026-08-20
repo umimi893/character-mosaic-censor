@@ -17,8 +17,14 @@ _BASE_DRAW_BODY_MAP = preview_module.ImageCanvas._draw_body_map
 
 
 def _enhanced_region_style(kind):
-    if "torso_back_zone" in kind:
+    if "torso_back_zone" in kind or "torso_geometry_v2" in kind:
         return QColor(122, 108, 255, 225), True
+    if "armpit_geometry_v2" in kind:
+        return QColor(255, 150, 70, 225), True
+    if "thigh_geometry_v2" in kind:
+        return QColor(70, 210, 200, 220), True
+    if "lower_leg_geometry_v2" in kind:
+        return QColor(70, 180, 220, 220), True
     return _BASE_REGION_STYLE(kind)
 
 
@@ -28,6 +34,15 @@ def _enhanced_humanize_signal(signal, language):
         mapping = {
             "inside_torso_back": "胴体・背中BBox内",
             "review_without_pelvis": "骨盤根拠なしの誤検出",
+            "inside_groin_zone": "股間候補領域内",
+            "inside_upper_back": "背中・肩甲骨領域内",
+            "inside_torso": "胴体領域内",
+            "near_right_armpit_v2": "右わき領域内",
+            "near_left_armpit_v2": "左わき領域内",
+            "on_right_thigh": "右太もも上",
+            "on_left_thigh": "左太もも上",
+            "on_right_lower_leg": "右脚上",
+            "on_left_lower_leg": "左脚上",
         }
         if prefix in mapping:
             return f"{mapping[prefix]}:{rest}" if sep else mapping[prefix]
@@ -39,16 +54,27 @@ def _enhanced_draw_body_map(canvas, painter, left, top, sx, sy, scale):
     state = getattr(canvas, "_state", None)
     if state is None:
         return
+    labels = {
+        "torso_back_zone": "torso/back",
+        "torso_geometry_v2": "torso v2",
+        "right_armpit_geometry_v2": "R armpit",
+        "left_armpit_geometry_v2": "L armpit",
+        "right_thigh_geometry_v2": "R thigh",
+        "left_thigh_geometry_v2": "L thigh",
+        "right_lower_leg_geometry_v2": "R leg",
+        "left_lower_leg_geometry_v2": "L leg",
+    }
     for region in state.body_regions:
-        if region.kind != "torso_back_zone":
+        label = labels.get(region.kind)
+        if label is None:
             continue
         color, _dashed = _enhanced_region_style(region.kind)
         rect = canvas._map_box(region.box, left, top, sx, sy)
         person = f" p{region.person_index}" if region.person_index >= 0 else ""
-        canvas._draw_label(painter, rect, f"torso/back{person}", color, compact=True)
+        canvas._draw_label(painter, rect, f"{label}{person}", color, compact=True)
 
 
-# The base canvas resolves these helpers at paint/evidence-render time.  Patch
+# The base canvas resolves these helpers at paint/evidence-render time. Patch
 # only the small presentation hooks so the stable preview implementation stays
 # shared with the normal folder workflow.
 preview_module._region_style = _enhanced_region_style
@@ -115,8 +141,8 @@ class DropPreviewWidget(PreviewWidget):
             return
         self.drop_hint.setText(
             self._t(
-                "画像1枚をここへドラッグ＆ドロップすると、フォルダ一括処理をせず単体テストできます。人体解析: 緑=骨盤保護 / 紫=頭 / 桃=顔 / 黄=目 / 青紫=胴体・背中",
-                "Drag one image here for a single-image test without running the whole folder. Body analysis: green=pelvis / purple=head / pink=face / yellow=eyes / violet=torso-back",
+                "画像1枚をここへドラッグ＆ドロップすると単体テストできます。人体解析では骨格に加えて胴体・背中・わき・太もも・脚の除外領域も確認できます。",
+                "Drag one image here for a single-image test. Body analysis also shows torso/back, armpit, thigh, and leg exclusion regions derived from the pose.",
             )
         )
 
