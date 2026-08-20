@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 from pathlib import Path
 
 from .corpus_miner import CorpusMiner, CorpusMinerConfig
@@ -16,7 +17,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-zip", action="store_true", help="Do not inspect ZIP archives")
     parser.add_argument("--no-idle-wait", action="store_true", help="Run even while the GPU is busy")
     parser.add_argument("--max-gpu-util", type=int, default=30, help="Idle threshold in percent (default: 30)")
-    parser.add_argument("--max-images", type=int, default=0, help="Maximum images per root, 0 = unlimited")
+    parser.add_argument("--max-images", type=int, default=0, help="Maximum images across all roots, 0 = unlimited")
     parser.add_argument("--no-crops", action="store_true", help="Do not store compact high-confidence candidate crops")
     parser.add_argument("--db", type=Path, default=None, help="Optional custom SQLite experience database")
     return parser
@@ -25,25 +26,36 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     store = ExperienceStore(args.db) if args.db else ExperienceStore()
-    config = CorpusMinerConfig(
+    base_config = CorpusMinerConfig(
         include_zip=not args.no_zip,
         idle_gpu_only=not args.no_idle_wait,
         max_gpu_utilization=max(5, min(95, args.max_gpu_util)),
         max_images=args.max_images or None,
         save_crops=not args.no_crops,
     )
-    miner = CorpusMiner(config, store=store)
+    miner = CorpusMiner(base_config, store=store)
     exit_code = 0
+    processed_total = 0
+
     for root in args.roots:
+        if base_config.max_images is not None:
+            remaining = int(base_config.max_images) - processed_total
+            if remaining <= 0:
+                break
+            miner.config = replace(base_config, max_images=remaining)
+        else:
+            miner.config = base_config
+
         try:
             stats = miner.mine(
                 root,
                 progress=lambda s, msg: print(
-                    f"[{s.processed:,}] candidates={s.candidates:,} gold={s.gold_negative:,} "
+                    f"[{processed_total + s.processed:,}] candidates={s.candidates:,} gold={s.gold_negative:,} "
                     f"dup={s.duplicates:,} skip={s.skipped:,} :: {msg}",
                     flush=True,
                 ),
             )
+            processed_total += stats.processed
             print(
                 f"DONE {root}: processed={stats.processed:,}, candidates={stats.candidates:,}, "
                 f"gold_negative={stats.gold_negative:,}, duplicates={stats.duplicates:,}, "
