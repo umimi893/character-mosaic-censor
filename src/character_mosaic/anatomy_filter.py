@@ -33,8 +33,10 @@ class AnatomyFilterConfig:
     enabled: bool = True
     min_keypoint_score: float = 0.45
     person_conf_threshold: float = 0.25
-    pelvis_keep_ratio: float = 0.25
-    pelvis_far_ratio: float = 0.55
+    # Protect a wide pelvis neighborhood. Suppression starts only once the
+    # candidate is clearly separated from that protected region.
+    pelvis_keep_ratio: float = 0.42
+    pelvis_far_ratio: float = 0.68
     knee_reject_ratio: float = 0.18
     armpit_reject_ratio: float = 0.16
     person_bbox_expand_ratio: float = 0.06
@@ -166,7 +168,7 @@ def apply_anatomy_filter(
     try:
         person_results = person_detector(
             image,
-            level="s",
+            level="m",
             version="v1.1",
             conf_threshold=cfg.person_conf_threshold,
             iou_threshold=0.5,
