@@ -6,7 +6,7 @@ Character Mosaic Censor contains original application/integration code and does 
 
 - Project: `deepghs/imgutils`
 - Upstream: https://github.com/deepghs/imgutils
-- Purpose: anime/CG object detection and ONNX inference integration used by `detect_censors`
+- Purpose: anime/CG object detection, person detection, DWPose integration, and ONNX inference
 - Version pinned by this project: `0.19.0`
 - Upstream license: MIT License
 - Upstream authors include narugo1992 and 7eu7d7
@@ -21,6 +21,24 @@ The upstream project metadata and GitHub repository identify `dghs-imgutils` as 
 - Upstream model-repository license: MIT
 
 Model weights are downloaded/cached by the upstream stack and are intentionally excluded from this repository.
+
+## Anime person detection model
+
+- Model repository used by `imgutils.detect.detect_person`: `deepghs/anime_person_detection`
+- Upstream: https://huggingface.co/deepghs/anime_person_detection
+- Purpose in Character Mosaic Censor: obtain per-person bounding boxes for the optional anatomy sanity check
+- Default model requested by v1.1: `person_detect_v1.1_s`
+
+The model is downloaded/cached by `dghs-imgutils`; no person-detection model weights are committed to this repository. Redistribution must follow the upstream model repository's applicable terms.
+
+## DWPose model
+
+- Model integration: `imgutils.pose.dwpose_estimate`
+- Model repository requested by `dghs-imgutils`: `yzd-v/DWPose`
+- Default model file requested by the pinned upstream implementation: `dw-ll_ucoco_384.onnx`
+- Purpose in Character Mosaic Censor: estimate shoulder, hip, and knee keypoints used only as a conservative false-positive sanity check
+
+The DWPose model is downloaded/cached by the upstream stack and is not included in this repository. Redistribution must follow the upstream model repository's applicable terms.
 
 ## PySide6 / Qt for Python
 
