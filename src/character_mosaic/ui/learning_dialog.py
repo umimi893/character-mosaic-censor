@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, QThread, QUrl
+from PySide6.QtCore import QSettings, QThread, QUrl, Signal
 from PySide6.QtGui import QCloseEvent, QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -26,6 +26,8 @@ from ..workers.corpus_miner_worker import CorpusMinerWorker
 
 class LearningDialog(QDialog):
     """Manage resumable mining of noisy legacy image folders and ZIPs."""
+
+    mining_stopped = Signal()
 
     def __init__(self, language: str = "ja", parent=None):
         super().__init__(parent)
@@ -274,9 +276,11 @@ class LearningDialog(QDialog):
         self.stop_button.setEnabled(False)
         self._set_options_enabled(True)
         self._refresh_store_stats(append=True)
-        if self._close_when_done:
-            self._close_when_done = False
+        close_when_done = self._close_when_done
+        self._close_when_done = False
+        if close_when_done:
             self.close()
+        self.mining_stopped.emit()
 
     def _set_options_enabled(self, enabled: bool) -> None:
         for widget in (
