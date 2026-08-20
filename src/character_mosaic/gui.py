@@ -6,7 +6,7 @@ def main() -> int:
     # character_mosaic.gui during tooling or tests.
     try:
         from .ui import main_window
-        from .ui.settings_safety import EnhancedControlPanel
+        from .ui.output_follow import OutputFollowControlPanel
         from .ui.ux_enhancements import EnhancedMainWindow
     except ImportError as exc:
         if exc.name and exc.name.startswith("PySide6"):
@@ -15,7 +15,7 @@ def main() -> int:
 
     # Keep the existing worker implementation intact and layer UX behavior over
     # the stable window/panel classes.
-    main_window.ControlPanel = EnhancedControlPanel
+    main_window.ControlPanel = OutputFollowControlPanel
     main_window.MainWindow = EnhancedMainWindow
     return main_window.main()
 
