@@ -10,6 +10,7 @@ from typing import Iterable, Sequence
 from .pipeline_config import PipelineConfig
 from .types import ProcessResult
 
+
 class JsonlRunLogger:
     """Crash-tolerant JSONL logger that flushes after each record."""
 
@@ -53,6 +54,7 @@ class JsonlRunLogger:
                 "cancelled": sum(1 for r in results if r.cancelled),
                 "errors": sum(1 for r in results if r.error),
                 "fatal_errors": sum(1 for r in results if r.fatal_error),
+                "anatomy_suppressed": sum(len(r.anatomy_suppressed) for r in results),
                 "elapsed_seconds": round((datetime.now() - self._started).total_seconds(), 3),
             }
         )
@@ -77,6 +79,8 @@ class JsonlRunLogger:
             os.fsync(self._file.fileno())
         except OSError:
             pass
+
+
 def write_jsonl_log(results: Iterable[ProcessResult], path: Path, config: PipelineConfig) -> None:
     results = list(results)
     logger = JsonlRunLogger(path, config).open(total_images=len(results))
@@ -86,6 +90,8 @@ def write_jsonl_log(results: Iterable[ProcessResult], path: Path, config: Pipeli
         logger.finish(results, stopped=any(r.cancelled for r in results))
     finally:
         logger.close()
+
+
 def _result_to_log_item(r: ProcessResult) -> dict:
     return {
         "type": "image",
@@ -102,4 +108,7 @@ def _result_to_log_item(r: ProcessResult) -> dict:
         "fatal_error": r.fatal_error,
         "detections": [asdict(d) for d in r.detections],
         "censor_boxes": [list(box) for box in r.censor_boxes],
+        "anatomy_filter_status": r.anatomy_filter_status,
+        "anatomy_suppressed": [asdict(d) for d in r.anatomy_suppressed],
+        "anatomy_suppression_reasons": list(r.anatomy_suppression_reasons),
     }
