@@ -4,8 +4,11 @@ from dataclasses import dataclass
 
 from PIL import Image
 
+import character_mosaic.anatomy_filter as anatomy_module
 from character_mosaic.anatomy_filter import (
+    AnatomyAwareDetector,
     AnatomyFilterConfig,
+    AnatomyFilterResult,
     _assess_candidate,
     apply_anatomy_filter,
 )
@@ -133,3 +136,50 @@ def test_overlapping_people_with_one_unusable_pose_fail_open():
     )
     assert result.kept == (detection,)
     assert result.suppressed == tuple()
+
+
+def test_environment_override_disables_filter(monkeypatch):
+    image = Image.new("RGB", (200, 400), "white")
+    detection = Detection((78, 310, 95, 330), "pussy", 0.55)
+    monkeypatch.setenv("CMC_ANATOMY_FILTER", "0")
+    result = apply_anatomy_filter(image, [detection])
+    assert result.status == "disabled"
+    assert result.kept == (detection,)
+
+
+def test_wrapper_accepts_simple_detector_signature(monkeypatch):
+    image = Image.new("RGB", (200, 400), "white")
+    detection = Detection((90, 215, 110, 245), "pussy", 0.55)
+
+    class SimpleDetector:
+        def detect(self, _image):
+            return [detection]
+
+    monkeypatch.setattr(
+        anatomy_module,
+        "apply_anatomy_filter",
+        lambda _image, detections, _cfg: AnatomyFilterResult(tuple(detections), status="applied"),
+    )
+    detector = AnatomyAwareDetector(SimpleDetector())
+    assert detector.detect(image) == [detection]
+
+
+def test_wrapper_disables_helper_after_run_wide_failure(monkeypatch):
+    image = Image.new("RGB", (200, 400), "white")
+    detection = Detection((90, 215, 110, 245), "pussy", 0.55)
+    calls = []
+
+    class SimpleDetector:
+        def detect(self, _image):
+            return [detection]
+
+    def fail_once(_image, detections, _cfg):
+        calls.append(1)
+        return AnatomyFilterResult(tuple(detections), status="failed:RuntimeError")
+
+    monkeypatch.setattr(anatomy_module, "apply_anatomy_filter", fail_once)
+    detector = AnatomyAwareDetector(SimpleDetector())
+    assert detector.detect(image) == [detection]
+    assert detector.detect(image) == [detection]
+    assert len(calls) == 1
+    assert detector.last_filter_result.status == "disabled_after_failure"
