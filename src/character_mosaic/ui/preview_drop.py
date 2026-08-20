@@ -13,6 +13,7 @@ from .preview_widget import PreviewWidget
 _SUPPORTED_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 _BASE_REGION_STYLE = preview_module._region_style
 _BASE_HUMANIZE_SIGNAL = preview_module._humanize_signal
+_BASE_DRAW_BODY_MAP = preview_module.ImageCanvas._draw_body_map
 
 
 def _enhanced_region_style(kind):
@@ -33,11 +34,26 @@ def _enhanced_humanize_signal(signal, language):
     return _BASE_HUMANIZE_SIGNAL(signal, language)
 
 
-# The base canvas resolves these helpers at paint/evidence-render time, so this
-# keeps the visualization extension small while preserving the stable preview
-# implementation.
+def _enhanced_draw_body_map(canvas, painter, left, top, sx, sy, scale):
+    _BASE_DRAW_BODY_MAP(canvas, painter, left, top, sx, sy, scale)
+    state = getattr(canvas, "_state", None)
+    if state is None:
+        return
+    for region in state.body_regions:
+        if region.kind != "torso_back_zone":
+            continue
+        color, _dashed = _enhanced_region_style(region.kind)
+        rect = canvas._map_box(region.box, left, top, sx, sy)
+        person = f" p{region.person_index}" if region.person_index >= 0 else ""
+        canvas._draw_label(painter, rect, f"torso/back{person}", color, compact=True)
+
+
+# The base canvas resolves these helpers at paint/evidence-render time.  Patch
+# only the small presentation hooks so the stable preview implementation stays
+# shared with the normal folder workflow.
 preview_module._region_style = _enhanced_region_style
 preview_module._humanize_signal = _enhanced_humanize_signal
+preview_module.ImageCanvas._draw_body_map = _enhanced_draw_body_map
 
 
 class DropPreviewWidget(PreviewWidget):
