@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import os
 from dataclasses import dataclass
 from math import hypot
@@ -84,6 +85,7 @@ class AnatomyAwareDetector:
     def __init__(self, detector, config: AnatomyFilterConfig | None = None):
         self.detector = detector
         self.config = config or AnatomyFilterConfig()
+        self._disabled_for_run = False
         self.reset_filter_state()
 
     def reset_filter_state(self) -> None:
@@ -91,20 +93,32 @@ class AnatomyAwareDetector:
 
     def detect(self, image: Image.Image, progress=None, stop_requested=None) -> list[Detection]:
         self.reset_filter_state()
-        detections = list(
-            self.detector.detect(
-                image,
-                progress=progress,
-                stop_requested=stop_requested,
-            )
-        )
+        detections = list(self._run_base_detector(image, progress, stop_requested))
         if stop_requested and stop_requested():
             self.last_filter_result = AnatomyFilterResult(tuple(detections), status="stopped")
+            return detections
+        if self._disabled_for_run:
+            self.last_filter_result = AnatomyFilterResult(tuple(detections), status="disabled_after_failure")
             return detections
 
         result = apply_anatomy_filter(image, detections, self.config)
         self.last_filter_result = result
+        if result.status.startswith(("failed:", "unavailable:")):
+            # Missing helper models/dependencies are normally run-wide problems.
+            # Do not retry downloads/imports for every image in a large batch.
+            self._disabled_for_run = True
         return list(result.kept)
+
+    def _run_base_detector(self, image: Image.Image, progress, stop_requested):
+        method = self.detector.detect
+        parameters = inspect.signature(method).parameters
+        accepts_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters.values())
+        kwargs = {}
+        if "progress" in parameters or accepts_kwargs:
+            kwargs["progress"] = progress
+        if "stop_requested" in parameters or accepts_kwargs:
+            kwargs["stop_requested"] = stop_requested
+        return method(image, **kwargs)
 
     def __getattr__(self, name: str):
         # Preserve access to detector-specific properties for diagnostics.
@@ -130,8 +144,8 @@ def apply_anatomy_filter(
 ) -> AnatomyFilterResult:
     """Suppress candidates only when reliable pose evidence says knee/armpit.
 
-    Dependency injection hooks are intentionally kept private-facing but make
-    the policy testable without downloading inference models.
+    Dependency injection hooks make the policy testable without downloading
+    inference models.
     """
 
     cfg = config or AnatomyFilterConfig()
