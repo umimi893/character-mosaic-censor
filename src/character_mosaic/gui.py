@@ -13,22 +13,22 @@ def main() -> int:
     # character_mosaic.gui during tooling or tests.
     try:
         from .ui import main_window
+        from .ui.learning_main_window import LearningMainWindow
         from .ui.output_follow import OutputFollowControlPanel
         from .ui.preview_drop import DropPreviewWidget
         from .ui.theme import DARK_STYLE
-        from .ui.ux_enhancements import EnhancedMainWindow
     except ImportError as exc:
         if exc.name and exc.name.startswith("PySide6"):
             raise RuntimeError("PySide6 がありません。install.bat を実行してください。") from exc
         raise
 
     # Keep the stable window implementation and layer public UX behavior over
-    # it.  Preview and control panel classes are replaced before MainWindow is
+    # it. Preview and control panel classes are replaced before MainWindow is
     # instantiated, so the base constructor automatically receives the enhanced
     # widgets.
     main_window.ControlPanel = OutputFollowControlPanel
     main_window.PreviewWidget = DropPreviewWidget
-    main_window.MainWindow = EnhancedMainWindow
+    main_window.MainWindow = LearningMainWindow
     main_window._STYLE = DARK_STYLE
     return main_window.main()
 
