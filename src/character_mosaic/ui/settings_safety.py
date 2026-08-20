@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QObject, QSettings
+from PySide6.QtCore import QEvent, QObject, QSettings, Qt
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractScrollArea,
@@ -21,17 +21,24 @@ from .settings_dialog import SettingsDialog
 
 
 class _WheelValueGuard(QObject):
-    """Keep mouse-wheel scrolling from silently changing settings controls."""
+    """Make the mouse wheel scroll only, never focus or change value controls."""
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802 - Qt API
         if event.type() != QEvent.Type.Wheel:
             return False
-        if not isinstance(watched, (QAbstractSpinBox, QComboBox)):
-            return False
 
-        self._forward_to_scroll_area(watched, event)
-        event.accept()
-        return True
+        if isinstance(watched, (QAbstractSpinBox, QComboBox)):
+            self._forward_to_scroll_area(watched, event)
+            event.accept()
+            return True
+
+        # Combo-box popup views are separate widgets. Consume wheel events there
+        # too so scrolling cannot move the highlighted/selected item.
+        if bool(watched.property("_wheel_selection_blocked")):
+            event.accept()
+            return True
+
+        return False
 
     @staticmethod
     def _forward_to_scroll_area(watched: QWidget, event: QEvent) -> None:
@@ -52,10 +59,26 @@ class _WheelValueGuard(QObject):
 
 def _install_wheel_guard(root: QWidget) -> _WheelValueGuard:
     guard = _WheelValueGuard(root)
+
+    # StrongFocus means these controls can receive focus from left-click or Tab,
+    # but not from the mouse wheel (WheelFocus).
     for widget in root.findChildren(QAbstractSpinBox):
+        widget.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         widget.installEventFilter(guard)
+
     for widget in root.findChildren(QComboBox):
+        widget.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         widget.installEventFilter(guard)
+
+        # A combo popup has its own scrollable view. Block wheel-driven
+        # highlight changes there as well; selection is left-click/keyboard only.
+        view = widget.view()
+        view.setProperty("_wheel_selection_blocked", True)
+        view.installEventFilter(guard)
+        viewport = view.viewport()
+        viewport.setProperty("_wheel_selection_blocked", True)
+        viewport.installEventFilter(guard)
+
     return guard
 
 
@@ -104,8 +127,8 @@ class EnhancedControlPanel(ControlPanel):
         self.settings_group.setTitle(self._t("設定管理", "Settings"))
         self.settings_help.setText(
             self._t(
-                "マウスホイールでは設定値は変わりません。Tabで項目移動、↑↓または直接入力で数値を変更できます。",
-                "The mouse wheel no longer changes values. Use Tab to move, then Up/Down or direct typing to edit numbers.",
+                "マウスホイールはスクロール専用です。設定欄は左クリックまたはTabで選択し、↑↓または直接入力で変更できます。",
+                "The mouse wheel is scroll-only. Select a setting with left-click or Tab, then use Up/Down or direct typing to edit it.",
             )
         )
         self.save_settings_button.setText(self._t("設定を保存", "Save settings"))
