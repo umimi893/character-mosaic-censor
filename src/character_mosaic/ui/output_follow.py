@@ -9,6 +9,7 @@ from .settings_safety import EnhancedControlPanel
 
 
 _OVERWRITE_DEFAULT_MIGRATION = "migrations/overwrite_default_v130"
+_GUI_LEARNING_DEFAULT = True
 
 
 def _as_bool(value) -> bool:
@@ -45,7 +46,7 @@ class OutputFollowControlPanel(EnhancedControlPanel):
         # normal processing can quietly accumulate candidate evidence while the
         # miner is launched explicitly for large legacy folders/ZIP archives.
         self.learning_capture = QCheckBox()
-        self.learning_capture.setChecked(PipelineConfig().learning_enabled)
+        self.learning_capture.setChecked(_GUI_LEARNING_DEFAULT)
         self.learning_button = QPushButton()
         options_layout = self.options_group.layout()
         insert_at = max(0, options_layout.count() - 1)
@@ -169,7 +170,7 @@ class OutputFollowControlPanel(EnhancedControlPanel):
 
         if hasattr(self, "learning_capture"):
             self.learning_capture.setChecked(
-                _as_bool(settings.value("learning/capture_enabled", PipelineConfig().learning_enabled))
+                _as_bool(settings.value("learning/capture_enabled", _GUI_LEARNING_DEFAULT))
             )
         settings.sync()
 
@@ -178,7 +179,7 @@ class OutputFollowControlPanel(EnhancedControlPanel):
         if changed:
             self.overwrite.setChecked(True)
             if hasattr(self, "learning_capture"):
-                self.learning_capture.setChecked(PipelineConfig().learning_enabled)
+                self.learning_capture.setChecked(_GUI_LEARNING_DEFAULT)
             self.save_settings(self._settings_store)
         return changed
 
