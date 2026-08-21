@@ -22,9 +22,10 @@ def _model():
         labels=labels,
         source_ids=source_ids,
         k=3,
+        support_k=3,
         temperature=0.05,
-        suppress_threshold=0.20,
-        similarity_floor=0.70,
+        margin_threshold=0.02,
+        negative_similarity_floor=0.70,
     )
 
 
@@ -32,11 +33,13 @@ def test_knn_verifier_separates_synthetic_visual_clusters():
     model = _model()
     positive = model.score(np.asarray([1.0, 0.02, 0.0], dtype=np.float32))
     negative = model.score(np.asarray([0.02, 1.0, 0.0], dtype=np.float32))
+    assert positive.margin < 0.0
+    assert negative.margin > 0.0
     assert positive.positive_score > 0.90
     assert negative.positive_score < 0.10
     assert positive.positive_neighbors == 3
     assert positive.negative_neighbors == 3
-    assert negative.negative_similarity > negative.positive_similarity
+    assert negative.negative_support > negative.positive_support
     assert model.should_suppress(np.asarray([0.02, 1.0, 0.0], dtype=np.float32))[0]
     assert not model.should_suppress(np.asarray([1.0, 0.02, 0.0], dtype=np.float32))[0]
 
@@ -47,12 +50,10 @@ def test_knn_verifier_excludes_same_source_from_both_classes():
     assert score.positive_neighbors == 2
     assert score.negative_neighbors == 3
     assert score.neighbors == 5
-    assert score.positive_score > 0.80
+    assert score.margin < 0.0
 
 
-def test_class_balancing_prevents_dense_positive_corpus_from_winning_by_count():
-    # Simulate the production imbalance: many positive references occupy the
-    # corpus, while only a few negative references describe a knee/skin crease.
+def test_class_margin_handles_dense_positive_corpus_without_count_bias():
     positive = np.asarray(
         [[0.78 + i * 0.001, 0.62 - i * 0.001] for i in range(30)],
         dtype=np.float32,
@@ -70,17 +71,25 @@ def test_class_balancing_prevents_dense_positive_corpus_from_winning_by_count():
         labels=labels,
         source_ids=source_ids,
         k=3,
+        support_k=3,
         temperature=0.06,
-        suppress_threshold=0.35,
-        similarity_floor=0.70,
+        margin_threshold=0.02,
+        negative_similarity_floor=0.70,
     )
 
     score = model.score(np.asarray([0.08, 1.0], dtype=np.float32))
 
     assert score.positive_neighbors == 3
     assert score.negative_neighbors == 3
-    assert score.positive_score < 0.20
+    assert score.margin > 0.20
     assert model.should_suppress(np.asarray([0.08, 1.0], dtype=np.float32))[0]
+
+
+def test_margin_requires_negative_support_to_beat_positive_support():
+    model = _model()
+    score = model.score(np.asarray([0.70, 0.70, 0.0], dtype=np.float32))
+    if score.margin <= model.margin_threshold:
+        assert not model.should_suppress(np.asarray([0.70, 0.70, 0.0], dtype=np.float32))[0]
 
 
 def test_knn_verifier_round_trips_model_file(tmp_path):
@@ -89,9 +98,11 @@ def test_knn_verifier_round_trips_model_file(tmp_path):
     restored = VerifierKnnModel.load(path)
     before = model.score(np.asarray([0.02, 1.0, 0.0], dtype=np.float32))
     after = restored.score(np.asarray([0.02, 1.0, 0.0], dtype=np.float32))
-    assert abs(before.positive_score - after.positive_score) < 1e-6
+    assert abs(before.margin - after.margin) < 1e-6
     assert restored.k == model.k
-    assert abs(restored.suppress_threshold - model.suppress_threshold) < 1e-6
+    assert restored.support_k == model.support_k
+    assert abs(restored.margin_threshold - model.margin_threshold) < 1e-6
+    assert abs(restored.negative_similarity_floor - model.negative_similarity_floor) < 1e-6
 
 
 def test_legacy_verifier_model_is_rejected_until_retrained(tmp_path):
@@ -99,13 +110,14 @@ def test_legacy_verifier_model_is_rejected_until_retrained(tmp_path):
     model = _model()
     np.savez_compressed(
         path,
+        score_version=np.asarray([2]),
         embeddings=model.embeddings,
         labels=model.labels,
         source_ids=model.source_ids,
         k=np.asarray([model.k]),
         temperature=np.asarray([model.temperature]),
-        suppress_threshold=np.asarray([model.suppress_threshold]),
-        similarity_floor=np.asarray([model.similarity_floor]),
+        suppress_threshold=np.asarray([0.20]),
+        similarity_floor=np.asarray([0.70]),
         model_name=np.asarray([model.model_name]),
         crop_scale=np.asarray([model.crop_scale]),
         min_crop_side=np.asarray([model.min_crop_side]),
