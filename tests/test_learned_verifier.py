@@ -20,7 +20,14 @@ class _AlwaysNegativeModel:
         return True, SimpleNamespace(
             positive_score=0.04,
             max_similarity=0.93,
-            neighbors=7,
+            neighbors=18,
+            positive_similarity=0.86,
+            negative_similarity=0.93,
+            positive_neighbors=9,
+            negative_neighbors=9,
+            positive_support=0.84,
+            negative_support=0.92,
+            margin=0.08,
         )
 
 
@@ -68,6 +75,8 @@ def test_active_learned_verifier_can_veto_unprotected_known_negative():
     assert final.evidence[0].decision == "suppress"
     assert diagnostics[0].would_suppress is True
     assert diagnostics[0].protected is False
+    assert diagnostics[0].margin > 0.0
+    assert "margin=+0.080" in final.evidence[0].negative_signals[-1]
 
 
 def test_learned_verifier_never_vetoes_close_same_person_pelvis_signal():
@@ -86,7 +95,7 @@ def test_learned_verifier_never_vetoes_close_same_person_pelvis_signal():
     assert diagnostics[0].protected is True
 
 
-def test_shadow_verifier_records_score_without_changing_decision():
+def test_shadow_verifier_records_margin_without_changing_decision():
     original = _result()
     final, diagnostics = apply_learned_verifier(
         original,
@@ -98,7 +107,10 @@ def test_shadow_verifier_records_score_without_changing_decision():
     assert final.kept == original.kept
     assert final.suppressed == tuple()
     assert final.evidence[0].decision == "keep"
-    assert any(signal.startswith("verifier_shadow:") for signal in final.evidence[0].positive_signals)
+    signal = next(signal for signal in final.evidence[0].positive_signals if signal.startswith("verifier_shadow:"))
+    assert "psup=0.840" in signal
+    assert "nsup=0.920" in signal
+    assert "margin=+0.080" in signal
     assert diagnostics[0].would_suppress is True
 
 
