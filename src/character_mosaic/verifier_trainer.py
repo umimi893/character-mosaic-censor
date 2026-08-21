@@ -107,7 +107,11 @@ def cross_validated_scores(
     k: int,
     temperature: float,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Score every labelled row while excluding all rows from the same image."""
+    """Score each row while excluding its source; return negative similarity.
+
+    The second returned array is intentionally the nearest *negative* reference
+    similarity. Runtime suppression uses the same value as its OOD guard.
+    """
 
     matrix = np.asarray(embeddings, dtype=np.float32)
     y = np.asarray(labels, dtype=np.int8)
@@ -122,53 +126,51 @@ def cross_validated_scores(
         similarity_floor=-1.0,
     )
     scores = np.empty(len(y), dtype=np.float32)
-    similarities = np.empty(len(y), dtype=np.float32)
+    negative_similarities = np.empty(len(y), dtype=np.float32)
     neighbors = np.empty(len(y), dtype=np.int32)
     for index, embedding in enumerate(probe_model.embeddings):
         result = probe_model.score(embedding, exclude_source_id=int(groups[index]))
         scores[index] = result.positive_score
-        similarities[index] = result.max_similarity
-        neighbors[index] = result.neighbors
-    return scores, similarities, neighbors
+        negative_similarities[index] = result.negative_similarity
+        neighbors[index] = min(result.positive_neighbors, result.negative_neighbors)
+    return scores, negative_similarities, neighbors
 
 
 def choose_conservative_policy(
     scores,
-    similarities,
+    negative_similarities,
     labels,
     *,
     max_suppress_threshold: float = 0.35,
 ) -> dict:
-    """Choose a one-sided veto threshold with zero observed positive suppressions.
+    """Choose a one-sided veto with zero observed positive suppressions.
 
-    The score cutoff is capped even when the labelled set looks perfectly
-    separable. This avoids turning a small training set into an aggressive
-    global classifier. A similarity floor also requires the candidate to be
-    visually close to known labelled material before the verifier may veto it.
+    The learned score is class-balanced, but negative training coverage is still
+    much smaller than positive coverage. Therefore a candidate may be vetoed
+    only when it is both below the positive-score threshold and sufficiently
+    similar to a known human-labelled negative example.
     """
 
     p = np.asarray(scores, dtype=np.float64)
-    sim = np.asarray(similarities, dtype=np.float64)
+    neg_sim = np.asarray(negative_similarities, dtype=np.float64)
     y = np.asarray(labels, dtype=np.int8)
-    valid = np.isfinite(p) & np.isfinite(sim) & (sim > -0.999)
+    valid = np.isfinite(p) & np.isfinite(neg_sim) & (neg_sim > -0.999)
     positives = valid & (y == 1)
     negatives = valid & (y == 0)
     if not np.any(positives) or not np.any(negatives):
         raise ValueError("both positive and negative validation rows are required")
 
-    # Runtime uses score < threshold, not <=, so setting the cutoff to the
-    # smallest observed positive score preserves every validation positive.
+    # Runtime uses score < threshold. Pinning the cutoff to the smallest
+    # observed positive score preserves every validation positive.
     threshold = min(float(max_suppress_threshold), float(np.min(p[positives])))
     negative_candidates = negatives & (p < threshold)
     if np.any(negative_candidates):
-        # Require a candidate to resemble at least the lower tail of negatives
-        # that the classifier already knows how to reject. This is an OOD guard.
-        floor = float(np.quantile(sim[negative_candidates], 0.10)) - 0.01
+        floor = float(np.quantile(neg_sim[negative_candidates], 0.10)) - 0.01
         floor = max(-1.0, min(1.0, floor))
     else:
         floor = 1.0
 
-    suppressed = valid & (p < threshold) & (sim >= floor)
+    suppressed = valid & (p < threshold) & (neg_sim >= floor)
     positive_count = int(np.sum(positives))
     negative_count = int(np.sum(negatives))
     false_suppressed = int(np.sum(suppressed & positives))
@@ -267,7 +269,7 @@ def train_verifier(
     if counts["positive"] < 2 or counts["negative"] < 2:
         raise ValueError("読み込み可能な本物/誤検出ラベルがそれぞれ2件以上必要です。")
 
-    cv_scores, cv_similarities, cv_neighbors = cross_validated_scores(
+    cv_scores, cv_negative_similarities, cv_neighbors = cross_validated_scores(
         matrix,
         y,
         groups,
@@ -276,7 +278,7 @@ def train_verifier(
     )
     policy = choose_conservative_policy(
         cv_scores,
-        cv_similarities,
+        cv_negative_similarities,
         y,
         max_suppress_threshold=max_suppress_threshold,
     )
@@ -303,12 +305,12 @@ def train_verifier(
         and policy["negative_suppression_rate"] >= 0.20
     )
     report = {
-        "schema": 1,
-        "model_type": "wd14_embedding_distinct_source_knn",
+        "schema": 2,
+        "model_type": "wd14_embedding_class_balanced_distinct_source_knn",
         "model_name": model_name,
         "crop_scale": float(crop_scale),
         "min_crop_side": int(min_crop_side),
-        "k": int(k),
+        "k_per_class": int(k),
         "temperature": float(temperature),
         "coverage": coverage,
         "manual_labels": label_stats,
@@ -318,15 +320,16 @@ def train_verifier(
         "embedding_failures": failures,
         "cross_validation": {
             **policy,
-            "rows_without_external_neighbors": int(np.sum(cv_neighbors == 0)),
-            "mean_max_similarity": float(np.mean(cv_similarities[cv_neighbors > 0]))
+            "rows_without_both_class_neighbors": int(np.sum(cv_neighbors == 0)),
+            "mean_negative_similarity": float(np.mean(cv_negative_similarities[cv_neighbors > 0]))
             if np.any(cv_neighbors > 0)
             else -1.0,
         },
         "activation_recommended": activation_recommended,
         "activation_rule": (
-            "candidate may be suppressed only when learned positive_score is below "
-            "suppress_threshold and max_similarity is above similarity_floor; safety gates remain authoritative"
+            "candidate may be suppressed only when class-balanced positive_score is below "
+            "suppress_threshold and nearest-negative similarity is above similarity_floor; "
+            "at least three distinct-source neighbors per class and recall safety gates remain required"
         ),
         "fingerprints": fingerprints,
         "model_path": str(model_path),
