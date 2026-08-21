@@ -2,11 +2,58 @@ from __future__ import annotations
 
 import numpy as np
 
+from character_mosaic.verifier_store import VerifierLabelSample
 from character_mosaic.verifier_trainer import (
+    _select_training_samples,
     choose_conservative_policy,
     cross_validated_scores,
     stable_source_id,
 )
+
+
+def _label_sample(fingerprint: str, label: str) -> VerifierLabelSample:
+    return VerifierLabelSample(
+        fingerprint=fingerprint,
+        label=label,
+        source_path=f"F:/clean/{fingerprint}.png",
+        crop_path=None,
+        box=(1, 2, 10, 20),
+        detector_score=0.3,
+        detector_source="full",
+        final_decision="keep",
+        positive_signals="[]",
+        negative_signals="[]",
+        pelvis_distance=None,
+        suppression_reason=None,
+    )
+
+
+class _FakeStore:
+    def __init__(self, samples):
+        self.samples = list(samples)
+
+    def labeled_samples(self, *, labels, limit=None, exclude_derived=True):
+        result = [sample for sample in self.samples if sample.label in set(labels)]
+        return result if limit is None else result[: int(limit)]
+
+
+def test_curated_selection_uses_latest_label_window_before_dropping_uncertain():
+    samples = [
+        _label_sample("old-positive", "positive"),
+        _label_sample("old-negative", "negative"),
+        _label_sample("new-negative", "negative"),
+        _label_sample("new-uncertain", "uncertain"),
+        _label_sample("new-positive", "positive"),
+    ]
+
+    selected, info = _select_training_samples(_FakeStore(samples), 3)
+
+    assert [sample.fingerprint for sample in selected] == ["new-negative", "new-positive"]
+    assert info["window_total"] == 3
+    assert info["window_positive"] == 1
+    assert info["window_negative"] == 1
+    assert info["window_uncertain"] == 1
+    assert info["training_rows_before_io"] == 2
 
 
 def test_conservative_policy_preserves_all_observed_positives():
