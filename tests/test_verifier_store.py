@@ -45,8 +45,16 @@ def test_human_label_survives_candidate_row_replacement(tmp_path):
     verifier = VerifierStore(db_path)
     rows = verifier.candidates(decision="keep", only_unlabeled=True)
     assert len(rows) == 1
+    assert verifier.coverage_stats() == {"candidates": 1, "labeled": 0, "unlabeled": 1}
+
     verifier.set_label(rows[0], "negative")
     assert verifier.stats()["negative"] == 1
+    assert verifier.coverage_stats() == {"candidates": 1, "labeled": 1, "unlabeled": 0}
+    samples = verifier.labeled_samples(labels=("negative",))
+    assert len(samples) == 1
+    assert samples[0].fingerprint == rows[0].fingerprint
+    assert samples[0].label == "negative"
+    assert samples[0].box == rows[0].box
 
     # Normal runtime learning replaces candidate rows for the same source.
     # Human truth is keyed by fingerprint and must not disappear with that row.
@@ -58,3 +66,4 @@ def test_human_label_survives_candidate_row_replacement(tmp_path):
     assert len(relisted) == 1
     assert relisted[0].manual_label == "negative"
     assert verifier.candidates(decision="keep", only_unlabeled=True) == []
+    assert verifier.labeled_samples(labels=("negative",))[0].detector_score == 0.36
