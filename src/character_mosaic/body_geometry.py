@@ -138,10 +138,8 @@ def apply_body_geometry_v2(
         if protected_by_other_person:
             # Preserve the important oral/close-contact case where a candidate
             # overlaps one person's body but is plausibly near another person's
-            # pelvis.
-            evidence_out.append(
-                evidence if evidence.decision == "keep" else replace(evidence, decision="keep")
-            )
+            # pelvis. Do not rewrite review metadata on the ordinary path.
+            evidence_out.append(evidence)
             kept.append(detection)
             continue
 
