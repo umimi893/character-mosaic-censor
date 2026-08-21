@@ -40,6 +40,9 @@ class LearnedVerifierDiagnostic:
     negative_similarity: float = -1.0
     positive_neighbors: int = 0
     negative_neighbors: int = 0
+    positive_support: float = -1.0
+    negative_support: float = -1.0
+    margin: float = 0.0
     error: str | None = None
 
 
@@ -145,8 +148,6 @@ class LearnedVerifierDetector:
             self._resolved_mode = self.requested_mode
             return
 
-        # auto: only opt into production vetoes after an explicit training
-        # report says the leave-source-out validation met conservative gates.
         try:
             report = json.loads(self.report_path.read_text(encoding="utf-8"))
             self._resolved_mode = "active" if bool(report.get("activation_recommended")) else "off"
@@ -195,14 +196,11 @@ def apply_learned_verifier(
                 embedder(crop, model_name=model.model_name, fmt="embedding")
             )
             would_suppress, score = model.should_suppress(embedding)
-            pos_sim = float(getattr(score, "positive_similarity", score.max_similarity))
-            neg_sim = float(getattr(score, "negative_similarity", score.max_similarity))
-            pos_n = int(getattr(score, "positive_neighbors", score.neighbors))
-            neg_n = int(getattr(score, "negative_neighbors", score.neighbors))
             signal = (
-                f"verifier_{mode}:p={score.positive_score:.3f}:"
-                f"sim={score.max_similarity:.3f}:psim={pos_sim:.3f}:nsim={neg_sim:.3f}:"
-                f"pn={pos_n}:nn={neg_n}"
+                f"verifier_{mode}:p={score.positive_score:.3f}:sim={score.max_similarity:.3f}:"
+                f"psim={score.positive_similarity:.3f}:nsim={score.negative_similarity:.3f}:"
+                f"psup={score.positive_support:.3f}:nsup={score.negative_support:.3f}:"
+                f"margin={score.margin:+.3f}:pn={score.positive_neighbors}:nn={score.negative_neighbors}"
             )
             annotations[evidence.detection] = signal
             diagnostics.append(
@@ -214,10 +212,13 @@ def apply_learned_verifier(
                     neighbors=score.neighbors,
                     would_suppress=bool(would_suppress),
                     protected=protected,
-                    positive_similarity=pos_sim,
-                    negative_similarity=neg_sim,
-                    positive_neighbors=pos_n,
-                    negative_neighbors=neg_n,
+                    positive_similarity=score.positive_similarity,
+                    negative_similarity=score.negative_similarity,
+                    positive_neighbors=score.positive_neighbors,
+                    negative_neighbors=score.negative_neighbors,
+                    positive_support=score.positive_support,
+                    negative_support=score.negative_support,
+                    margin=score.margin,
                 )
             )
             if mode != "active" or not would_suppress or protected:
@@ -269,7 +270,7 @@ def apply_learned_verifier(
 
         diagnostic = diagnostic_by_detection[evidence.detection]
         negative_signal = (
-            f"{_REASON}:p={diagnostic.positive_score:.3f}:"
+            f"{_REASON}:margin={diagnostic.margin:+.3f}:"
             f"nsim={diagnostic.negative_similarity:.3f}"
         )
         evidence_out.append(
@@ -294,10 +295,7 @@ def apply_learned_verifier(
 def _is_recall_protected(evidence: CandidateEvidence) -> bool:
     if len(evidence.matched_persons) > 1:
         return True
-    if any(
-        signal.startswith(_PROTECTED_SIGNAL_PREFIXES)
-        for signal in evidence.positive_signals
-    ):
+    if any(signal.startswith(_PROTECTED_SIGNAL_PREFIXES) for signal in evidence.positive_signals):
         return True
     if (
         evidence.pelvis_distance_ratio is not None
@@ -305,8 +303,6 @@ def _is_recall_protected(evidence: CandidateEvidence) -> bool:
         and any(signal.startswith("near_pelvis:") for signal in evidence.positive_signals)
     ):
         return True
-    # A pelvis signal belonging to another person is a close-contact safety
-    # condition even if the candidate itself is matched to one body.
     matched = set(int(value) for value in evidence.matched_persons)
     pelvis_people = _signal_people(evidence.positive_signals, "near_pelvis")
     return bool(pelvis_people - matched)
