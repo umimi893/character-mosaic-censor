@@ -37,6 +37,7 @@ Source = "https://github.com/umimi893/character-mosaic-censor"
 [project.scripts]
 character-mosaic = "character_mosaic.cli:main"
 character-mosaic-mine = "character_mosaic.miner_cli:main"
+character-mosaic-probe = "character_mosaic.semantic_probe_cli:main"
 
 [project.gui-scripts]
 character-mosaic-gui = "character_mosaic.gui:main"
