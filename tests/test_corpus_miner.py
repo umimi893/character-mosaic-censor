@@ -33,7 +33,9 @@ class FakeMiningDetector:
 
 def _png_bytes(color=(120, 90, 80)) -> bytes:
     buffer = io.BytesIO()
-    Image.new("RGB", (96, 96), color).save(buffer, "PNG")
+    # Keep the ordinary corpus fixture above CorpusMinerConfig.min_side (128).
+    # Tests that exercise size rejection set their own explicit limits.
+    Image.new("RGB", (160, 160), color).save(buffer, "PNG")
     return buffer.getvalue()
 
 
