@@ -37,6 +37,48 @@ def stable_source_id(path: str) -> int:
     return int.from_bytes(digest, "little", signed=False) & ((1 << 63) - 1)
 
 
+def _select_training_samples(
+    store: VerifierStore,
+    max_samples: int | None,
+) -> tuple[list[VerifierLabelSample], dict[str, int | str | None]]:
+    """Select a clean human-labelled training set.
+
+    With no cap, use all clean positive/negative labels. With a cap, the cap is
+    interpreted as a *recent curation window*: first take the most recently
+    touched clean labels including uncertain rows, then remove uncertain rows
+    from training. This prevents old ambiguous P/N labels from silently filling
+    slots that the user intentionally marked uncertain in the latest review.
+    """
+
+    if max_samples is None:
+        samples = store.labeled_samples(labels=("positive", "negative"))
+        return samples, {
+            "mode": "all_clean_positive_negative",
+            "window_limit": None,
+            "window_total": len(samples),
+            "window_positive": sum(sample.label == "positive" for sample in samples),
+            "window_negative": sum(sample.label == "negative" for sample in samples),
+            "window_uncertain": 0,
+            "training_rows_before_io": len(samples),
+        }
+
+    limit = max(1, int(max_samples))
+    # VerifierStore returns labels in ascending update order. Take the tail so
+    # the user's newest review session defines the curated window.
+    all_clean = store.labeled_samples(labels=("positive", "negative", "uncertain"))
+    window = all_clean[-limit:]
+    samples = [sample for sample in window if sample.label in {"positive", "negative"}]
+    return samples, {
+        "mode": "latest_clean_label_window",
+        "window_limit": limit,
+        "window_total": len(window),
+        "window_positive": sum(sample.label == "positive" for sample in window),
+        "window_negative": sum(sample.label == "negative" for sample in window),
+        "window_uncertain": sum(sample.label == "uncertain" for sample in window),
+        "training_rows_before_io": len(samples),
+    }
+
+
 def _cache_namespace(model_name: str, crop_scale: float, min_crop_side: int) -> str:
     safe_model = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(model_name))
     scale = str(round(float(crop_scale), 3)).replace(".", "p")
@@ -222,9 +264,9 @@ def train_verifier(
 
     label_stats = store.stats()
     coverage = store.coverage_stats()
-    samples = store.labeled_samples(labels=("positive", "negative"), limit=max_samples)
+    samples, selection = _select_training_samples(store, max_samples)
     if len(samples) < 4:
-        raise ValueError("Verifier学習には本物/誤検出ラベルが最低数件必要です。")
+        raise ValueError("Verifier学習には今回の選択範囲内に本物/誤検出ラベルが最低数件必要です。")
 
     embeddings: list[np.ndarray] = []
     labels: list[int] = []
@@ -273,7 +315,7 @@ def train_verifier(
     groups = np.asarray(source_ids, dtype=np.int64)
     counts = binary_counts(y)
     if counts["positive"] < 2 or counts["negative"] < 2:
-        raise ValueError("読み込み可能な本物/誤検出ラベルがそれぞれ2件以上必要です。")
+        raise ValueError("今回の選択範囲内に読み込み可能な本物/誤検出ラベルがそれぞれ2件以上必要です。")
 
     cv_scores, cv_negative_similarities, cv_neighbors = cross_validated_scores(
         matrix,
@@ -320,6 +362,7 @@ def train_verifier(
         "temperature": float(temperature),
         "coverage": coverage,
         "manual_labels": label_stats,
+        "selection": selection,
         "usable_training_rows": counts,
         "embedding_cache_hits": cache_hits,
         "embeddings_computed": computed,
