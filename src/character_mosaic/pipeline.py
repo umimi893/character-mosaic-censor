@@ -14,6 +14,7 @@ from pathlib import Path
 from .anatomy_filter import AnatomyFilterConfig
 from .body_geometry import GeometryV2Detector
 from .body_reasoning import BodyReasoningDetector
+from .candidate_arbitration import CandidateArbitrationDetector
 from .experience_recorder import record_process_experience
 from .i18n import t
 from .negative_memory import NegativeMemoryDetector
@@ -35,8 +36,9 @@ class BatchProcessor(_BatchProcessor):
                 AnatomyFilterConfig(enabled=self.config.anatomy_filter),
             )
             geometry = GeometryV2Detector(body)
+            arbitration = CandidateArbitrationDetector(geometry)
             self.detector = NegativeMemoryDetector(
-                geometry,
+                arbitration,
                 enabled=bool(getattr(self.config, "learning_enabled", True)),
             )
 
