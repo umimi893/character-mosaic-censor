@@ -21,6 +21,9 @@ from ..types import Detection
 from ..verifier_store import VerifierCandidate, VerifierStore
 
 
+_LAB_CANDIDATE_LIMIT = 300
+
+
 class VerifierLabDialog(QDialog):
     """Human labeling UI for candidate-level verifier ground truth."""
 
@@ -38,10 +41,10 @@ class VerifierLabDialog(QDialog):
         layout = QVBoxLayout(self)
 
         intro = QLabel(self._t(
-            "候補を見て『本物』『誤検出』『保留』を付けます。ラベルは候補fingerprintに保存され、"
-            "通常処理を再実行しても残ります。元画像は変更しません。",
-            "Label each candidate as target, false positive, or uncertain. Labels are stored by candidate fingerprint "
-            "and survive normal reruns. Source images are never modified.",
+            "候補を見て『本物』『誤検出』『保留』を付けます。処理済みの _censored / review 系画像は"
+            "自動除外し、1回の表示は最大300件です。ラベルは候補fingerprintに保存されます。",
+            "Label each candidate as target, false positive, or uncertain. Derived _censored/review outputs are "
+            "excluded automatically and each session shows at most 300 candidates. Labels are stored by fingerprint.",
         ))
         intro.setWordWrap(True)
         layout.addWidget(intro)
@@ -116,7 +119,8 @@ class VerifierLabDialog(QDialog):
             self.rows = self.store.candidates(
                 decision=str(self.filter_combo.currentData()),
                 only_unlabeled=self.unlabeled_only.isChecked(),
-                limit=10000,
+                limit=_LAB_CANDIDATE_LIMIT,
+                exclude_derived=True,
             )
             self.index = 0
             self._show_current()
@@ -157,12 +161,12 @@ class VerifierLabDialog(QDialog):
             self._show_current()
 
     def _show_current(self) -> None:
-        counts = self.store.stats()
+        counts = self.store.stats(exclude_derived=True)
         self.stats_label.setText(self._t(
-            f"教師ラベル: 本物 {counts['positive']:,} / 誤検出 {counts['negative']:,} / "
-            f"保留 {counts['uncertain']:,} / 合計 {counts['total']:,}　|　表示候補 {len(self.rows):,}",
-            f"Ground truth: target {counts['positive']:,} / false positive {counts['negative']:,} / "
-            f"uncertain {counts['uncertain']:,} / total {counts['total']:,} | visible {len(self.rows):,}",
+            f"クリーン教師ラベル: 本物 {counts['positive']:,} / 誤検出 {counts['negative']:,} / "
+            f"保留 {counts['uncertain']:,} / 合計 {counts['total']:,}　|　表示候補 {len(self.rows):,}/{_LAB_CANDIDATE_LIMIT}",
+            f"Clean ground truth: target {counts['positive']:,} / false positive {counts['negative']:,} / "
+            f"uncertain {counts['uncertain']:,} / total {counts['total']:,} | visible {len(self.rows):,}/{_LAB_CANDIDATE_LIMIT}",
         ))
 
         row = self.current_row()
