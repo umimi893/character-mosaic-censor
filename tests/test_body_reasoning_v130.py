@@ -286,3 +286,70 @@ def test_upper_body_retry_fallback_preserves_other_person_pelvis_protection():
 
     assert final.kept == (detection,)
     assert final.suppressed == tuple()
+
+
+def test_tile_only_low_confidence_armpit_candidate_is_suppressed_without_lower_pose():
+    # Real regression: DWPose returned only face landmarks, and a tile-only
+    # 0.354 candidate landed directly on the armpit/upper-body crease.
+    detection = Detection((394, 704, 442, 748), "pussy", 0.35373878479003906, "tile_2x2_1of4")
+    evidence = CandidateEvidence(
+        detection=detection,
+        decision="keep",
+        positive_signals=("detector:0.354",),
+        matched_persons=(0,),
+        pelvis_distance_ratio=None,
+    )
+    face_only_pose = (
+        PosePoint(459.7, 404.5, 0.49, "nose", 0),
+        PosePoint(341.5, 361.3, 0.54, "right_eye", 0),
+        PosePoint(503.0, 335.3, 0.56, "left_eye", 0),
+        PosePoint(214.6, 465.1, 0.58, "right_ear", 0),
+        PosePoint(583.7, 387.2, 0.49, "left_ear", 0),
+    )
+    result = AnatomyFilterResult(
+        kept=(detection,),
+        evidence=(evidence,),
+        pose_points=face_only_pose,
+        body_regions=_regions((0, 4, 1329, 1728), (37, 61, 666, 615)),
+        status="applied",
+    )
+
+    final = enhance_anatomy_result(result, (1329, 1728))
+
+    assert final.kept == tuple()
+    assert final.evidence[0].decision == "suppress"
+    assert final.suppressed[0].reason == "upper_body_tile_without_lower_pose"
+    assert any(
+        signal.startswith("upper_body_tile_without_lower_pose:p0:")
+        for signal in final.evidence[0].negative_signals
+    )
+
+
+def test_tile_candidate_confirmed_by_full_pass_is_not_suppressed_by_aux_fallback():
+    # Same production image contained another low-confidence candidate that was
+    # independently confirmed by the full pass. The tile-only fallback must not
+    # generalize to this source provenance.
+    detection = Detection(
+        (1031, 1487, 1143, 1566),
+        "pussy",
+        0.33183521032333374,
+        "tile_2x2_4of4+full",
+    )
+    evidence = CandidateEvidence(
+        detection=detection,
+        decision="keep",
+        positive_signals=("detector:0.332",),
+        matched_persons=(0,),
+        pelvis_distance_ratio=None,
+    )
+    result = AnatomyFilterResult(
+        kept=(detection,),
+        evidence=(evidence,),
+        body_regions=_regions((0, 4, 1329, 1728), (37, 61, 666, 615)),
+        status="regions_only",
+    )
+
+    final = enhance_anatomy_result(result, (1329, 1728))
+
+    assert final.kept == (detection,)
+    assert final.suppressed == tuple()
