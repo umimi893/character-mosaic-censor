@@ -9,6 +9,21 @@ from .experience_store import default_experience_db, utc_now
 
 
 _VALID_LABELS = frozenset({"positive", "negative", "uncertain"})
+_DERIVED_SOURCE_DIRS = frozenset({"_censored", "_manual_review", "review", "auto_censored"})
+
+
+def is_derived_source_path(path: str | Path) -> bool:
+    """Return True for runtime/review output paths that must not become ground truth.
+
+    Verifier labels must describe the uncensored visual candidate. A source below
+    one of the application's output/review directories can already contain a
+    mosaic or black censor block, so it is excluded from Lab presentation and
+    training by default.
+    """
+
+    normalized = str(path).replace("\\", "/").lower()
+    parts = tuple(part for part in normalized.split("/") if part)
+    return any(part in _DERIVED_SOURCE_DIRS for part in parts)
 
 
 @dataclass(frozen=True)
@@ -101,6 +116,7 @@ class VerifierStore:
         decision: str = "all",
         only_unlabeled: bool = True,
         limit: int = 5000,
+        exclude_derived: bool = True,
     ) -> list[VerifierCandidate]:
         where = ["c.fingerprint IS NOT NULL"]
         params: list[object] = []
@@ -109,7 +125,13 @@ class VerifierStore:
             params.append(decision)
         if only_unlabeled:
             where.append("vl.fingerprint IS NULL")
-        params.append(max(1, int(limit)))
+
+        requested_limit = max(1, int(limit))
+        # Fetch beyond the requested display count because derived runtime/review
+        # paths are filtered in Python below. This keeps the SQL simple and path
+        # handling platform-independent while still bounding the query.
+        query_limit = max(requested_limit * 5, 5000) if exclude_derived else requested_limit
+        params.append(query_limit)
 
         sql = f"""
             SELECT
@@ -135,7 +157,10 @@ class VerifierStore:
         """
         with self.connect() as db:
             rows = db.execute(sql, params).fetchall()
-        return [self._row_to_candidate(row) for row in rows]
+        candidates = [self._row_to_candidate(row) for row in rows]
+        if exclude_derived:
+            candidates = [row for row in candidates if not is_derived_source_path(row.source_path)]
+        return candidates[:requested_limit]
 
     def set_label(self, candidate: VerifierCandidate, label: str) -> None:
         label = str(label).strip().lower()
@@ -188,18 +213,13 @@ class VerifierStore:
         *,
         labels: Sequence[str] = ("positive", "negative"),
         limit: int | None = None,
+        exclude_derived: bool = True,
     ) -> list[VerifierLabelSample]:
         wanted = tuple(str(label).strip().lower() for label in labels)
         if not wanted or any(label not in _VALID_LABELS for label in wanted):
             raise ValueError("labels must contain positive, negative, or uncertain")
         placeholders = ",".join("?" for _ in wanted)
         params: list[object] = list(wanted)
-        tail = ""
-        if limit is not None:
-            if int(limit) < 1:
-                return []
-            tail = " LIMIT ?"
-            params.append(int(limit))
         sql = f"""
             SELECT
                 fingerprint,label,source_path,crop_path,x0,y0,x1,y1,
@@ -208,41 +228,56 @@ class VerifierStore:
             FROM verifier_labels
             WHERE label IN ({placeholders})
             ORDER BY updated_at, fingerprint
-            {tail}
         """
         with self.connect() as db:
             rows = db.execute(sql, params).fetchall()
-        return [self._row_to_label_sample(row) for row in rows]
+        samples = [self._row_to_label_sample(row) for row in rows]
+        if exclude_derived:
+            samples = [row for row in samples if not is_derived_source_path(row.source_path)]
+        if limit is not None:
+            if int(limit) < 1:
+                return []
+            samples = samples[: int(limit)]
+        return samples
 
-    def coverage_stats(self) -> dict[str, int]:
+    def coverage_stats(self, *, exclude_derived: bool = True) -> dict[str, int]:
         """Return distinct candidate coverage by human labels."""
 
         with self.connect() as db:
-            row = db.execute(
+            rows = db.execute(
                 """
-                SELECT
-                    COUNT(DISTINCT c.fingerprint) AS candidates,
-                    COUNT(DISTINCT CASE WHEN vl.fingerprint IS NOT NULL THEN c.fingerprint END) AS labeled,
-                    COUNT(DISTINCT CASE WHEN vl.fingerprint IS NULL THEN c.fingerprint END) AS unlabeled
+                SELECT c.fingerprint, s.container_path AS source_path,
+                       CASE WHEN vl.fingerprint IS NULL THEN 0 ELSE 1 END AS labeled
                 FROM candidates c
+                JOIN sources s ON s.id=c.source_id
                 LEFT JOIN verifier_labels vl ON vl.fingerprint=c.fingerprint
                 WHERE c.fingerprint IS NOT NULL
                 """
-            ).fetchone()
+            ).fetchall()
+        state: dict[str, bool] = {}
+        for row in rows:
+            source_path = str(row["source_path"] or "")
+            if exclude_derived and is_derived_source_path(source_path):
+                continue
+            fingerprint = str(row["fingerprint"])
+            state[fingerprint] = state.get(fingerprint, False) or bool(row["labeled"])
+        labeled = sum(bool(value) for value in state.values())
         return {
-            "candidates": int(row["candidates"] or 0),
-            "labeled": int(row["labeled"] or 0),
-            "unlabeled": int(row["unlabeled"] or 0),
+            "candidates": len(state),
+            "labeled": labeled,
+            "unlabeled": len(state) - labeled,
         }
 
-    def stats(self) -> dict[str, int]:
+    def stats(self, *, exclude_derived: bool = True) -> dict[str, int]:
         with self.connect() as db:
             rows = db.execute(
-                "SELECT label, COUNT(*) AS n FROM verifier_labels GROUP BY label"
+                "SELECT label, source_path FROM verifier_labels"
             ).fetchall()
         counts = {"positive": 0, "negative": 0, "uncertain": 0}
         for row in rows:
-            counts[str(row["label"])] = int(row["n"])
+            if exclude_derived and is_derived_source_path(str(row["source_path"] or "")):
+                continue
+            counts[str(row["label"])] += 1
         counts["total"] = sum(counts.values())
         return counts
 
