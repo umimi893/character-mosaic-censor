@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from character_mosaic.anatomy_filter import AnatomyFilterResult
+from character_mosaic.anatomy_filter import AnatomyFilterResult, AnatomySuppression
 from character_mosaic.body_geometry import apply_body_geometry_v2
 from character_mosaic.types import CandidateEvidence, Detection, PosePoint
 
@@ -27,6 +27,40 @@ def _result(box, *, matched=(0,), positive=(), points=None, score=0.7):
     )
     return detection, AnatomyFilterResult(
         kept=(detection,), evidence=(evidence,), pose_points=points or _pose(), status="applied"
+    )
+
+
+def _suppressed_result(
+    box,
+    reason,
+    *,
+    matched=(0,),
+    positive=(),
+    points=None,
+    score=0.7,
+):
+    detection = Detection(box, "pussy", score)
+    evidence = CandidateEvidence(
+        detection=detection,
+        decision="suppress",
+        positive_signals=tuple(positive),
+        negative_signals=(f"{reason}:p0:1.000",),
+        matched_persons=tuple(matched),
+        pelvis_distance_ratio=0.9,
+    )
+    suppression = AnatomySuppression(
+        detection=detection,
+        reason=reason,
+        person_index=0,
+        joint_distance_ratio=0.0,
+        pelvis_distance_ratio=0.9,
+    )
+    return detection, AnatomyFilterResult(
+        kept=tuple(),
+        suppressed=(suppression,),
+        evidence=(evidence,),
+        pose_points=points or _pose(),
+        status="applied",
     )
 
 
@@ -66,6 +100,23 @@ def test_directional_groin_zone_protects_candidate():
     assert any(signal.startswith("inside_groin_zone:p0") for signal in final.evidence[0].positive_signals)
 
 
+def test_directional_groin_zone_rescues_legacy_torso_suppression():
+    detection, result = _suppressed_result((90, 222, 110, 242), "inside_torso_back")
+    final = apply_body_geometry_v2(result, (300, 450))
+    assert final.kept == (detection,)
+    assert final.suppressed == tuple()
+    assert final.evidence[0].decision == "keep"
+    assert any(signal.startswith("inside_groin_zone:p0") for signal in final.evidence[0].positive_signals)
+
+
+def test_groin_zone_does_not_override_face_semantic_suppression():
+    detection, result = _suppressed_result((90, 222, 110, 242), "inside_eye_face_head")
+    final = apply_body_geometry_v2(result, (300, 450))
+    assert final.kept == tuple()
+    assert final.suppressed[0].detection == detection
+    assert final.suppressed[0].reason == "inside_eye_face_head"
+
+
 def test_unmatched_candidate_fails_open():
     detection, result = _result((90, 120, 110, 150), matched=())
     final = apply_body_geometry_v2(result, (300, 450))
@@ -77,6 +128,20 @@ def test_other_person_pelvis_signal_wins_over_back_geometry():
     points = _pose(0) + _pose(1, x=220)
     detection, result = _result(
         (90, 120, 110, 150),
+        matched=(0,),
+        positive=("near_pelvis:p1:0.18",),
+        points=points,
+    )
+    final = apply_body_geometry_v2(result, (600, 450))
+    assert final.kept == (detection,)
+    assert final.suppressed == tuple()
+
+
+def test_other_person_pelvis_can_rescue_legacy_body_suppression():
+    points = _pose(0) + _pose(1, x=220)
+    detection, result = _suppressed_result(
+        (90, 120, 110, 150),
+        "inside_torso_back",
         matched=(0,),
         positive=("near_pelvis:p1:0.18",),
         points=points,
