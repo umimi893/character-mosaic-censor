@@ -41,6 +41,7 @@ character-mosaic-probe = "character_mosaic.semantic_probe_cli:main"
 
 [project.gui-scripts]
 character-mosaic-gui = "character_mosaic.gui:main"
+character-mosaic-verifier-lab = "character_mosaic.verifier_lab:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
