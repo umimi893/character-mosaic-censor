@@ -110,7 +110,9 @@ def cross_validated_scores(
     """Score each row while excluding its source; return negative similarity.
 
     The second returned array is intentionally the nearest *negative* reference
-    similarity. Runtime suppression uses the same value as its OOD guard.
+    similarity. Runtime suppression uses the same value as its OOD guard. Rows
+    without the same minimum per-class neighbour support required at runtime are
+    marked invalid for policy selection.
     """
 
     matrix = np.asarray(embeddings, dtype=np.float32)
@@ -128,11 +130,15 @@ def cross_validated_scores(
     scores = np.empty(len(y), dtype=np.float32)
     negative_similarities = np.empty(len(y), dtype=np.float32)
     neighbors = np.empty(len(y), dtype=np.int32)
+    required_neighbors = min(3, max(1, int(k)))
     for index, embedding in enumerate(probe_model.embeddings):
         result = probe_model.score(embedding, exclude_source_id=int(groups[index]))
+        class_neighbors = min(result.positive_neighbors, result.negative_neighbors)
         scores[index] = result.positive_score
-        negative_similarities[index] = result.negative_similarity
-        neighbors[index] = min(result.positive_neighbors, result.negative_neighbors)
+        neighbors[index] = class_neighbors
+        negative_similarities[index] = (
+            result.negative_similarity if class_neighbors >= required_neighbors else -1.0
+        )
     return scores, negative_similarities, neighbors
 
 
@@ -320,9 +326,9 @@ def train_verifier(
         "embedding_failures": failures,
         "cross_validation": {
             **policy,
-            "rows_without_both_class_neighbors": int(np.sum(cv_neighbors == 0)),
-            "mean_negative_similarity": float(np.mean(cv_negative_similarities[cv_neighbors > 0]))
-            if np.any(cv_neighbors > 0)
+            "rows_without_required_class_neighbors": int(np.sum(cv_neighbors < min(3, max(1, int(k))))),
+            "mean_negative_similarity": float(np.mean(cv_negative_similarities[cv_negative_similarities > -0.999]))
+            if np.any(cv_negative_similarities > -0.999)
             else -1.0,
         },
         "activation_recommended": activation_recommended,
