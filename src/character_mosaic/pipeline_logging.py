@@ -11,6 +11,10 @@ from .pipeline_config import PipelineConfig
 from .types import ProcessResult
 
 
+_VERIFIER_SIGNAL_PREFIXES = ("verifier_active:", "verifier_shadow:")
+_LEARNED_VERIFIER_REASON = "learned_verifier_negative"
+
+
 class JsonlRunLogger:
     """Crash-tolerant JSONL logger that flushes after each record."""
 
@@ -34,6 +38,8 @@ class JsonlRunLogger:
             "errors":sum(1 for r in results if r.error),"fatal_errors":sum(1 for r in results if r.fatal_error),
             "anatomy_suppressed":sum(len(r.anatomy_suppressed) for r in results),
             "body_review_candidates":sum(sum(1 for item in r.candidate_evidence if item.decision=="review") for r in results),
+            "verifier_scored_candidates":sum(_verifier_scored_count(r) for r in results),
+            "verifier_suppressed_candidates":sum(_verifier_suppressed_count(r) for r in results),
             "elapsed_seconds":round((datetime.now()-self._started).total_seconds(),3),
         })
 
@@ -54,6 +60,25 @@ def write_jsonl_log(results: Iterable[ProcessResult], path: Path, config: Pipeli
         for result in results: logger.log_result(result)
         logger.finish(results,stopped=any(r.cancelled for r in results))
     finally: logger.close()
+
+
+def _verifier_scored_count(result: ProcessResult) -> int:
+    return sum(
+        1
+        for item in result.candidate_evidence
+        if any(
+            signal.startswith(_VERIFIER_SIGNAL_PREFIXES)
+            for signal in item.positive_signals
+        )
+    )
+
+
+def _verifier_suppressed_count(result: ProcessResult) -> int:
+    return sum(
+        1
+        for reason in result.anatomy_suppression_reasons
+        if str(reason).startswith(_LEARNED_VERIFIER_REASON)
+    )
 
 
 def _result_to_log_item(r: ProcessResult) -> dict:

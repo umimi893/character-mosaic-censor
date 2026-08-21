@@ -35,6 +35,10 @@ class PipelineConfig:
     generate_review_html: bool = True
     preview_max_side: int = 1600
     jpeg_quality: int = 95
+    # Learned candidate verifier. ``auto`` is deliberately conservative: it
+    # activates only when a local training_report.json explicitly marks the
+    # human-labelled model as recommended. Missing/unvalidated models fail open.
+    verifier_mode: str = "auto"
     # Core/CLI callers stay side-effect free by default. The desktop GUI turns
     # this on by default so normal interactive use continuously expands the
     # local hard-negative corpus without changing original images.
@@ -66,6 +70,8 @@ class PipelineConfig:
             raise ValueError("Preview最大辺は 320px 以上にしてください。")
         if not 70 <= self.jpeg_quality <= 100:
             raise ValueError("JPEG品質は 70〜100 の範囲にしてください。")
+        if self.verifier_mode not in {"off", "shadow", "active", "auto"}:
+            raise ValueError("Verifier mode must be off/shadow/active/auto.")
         DetectorConfig(
             detection_threshold=self.detection_threshold,
             model_level=self.model_level,

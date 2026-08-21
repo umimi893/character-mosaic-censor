@@ -7,7 +7,7 @@ name = "character-mosaic-censor"
 version = "1.4.0"
 description = "Local Windows GUI for recall-oriented censoring of sensitive regions in anime/CG images"
 readme = "README.md"
-license = {file = "LICENSE"}
+license = {file="LICENSE"}
 keywords = ["anime", "image-processing", "computer-vision", "onnx", "pyside6", "mosaic"]
 classifiers = [
   "Development Status :: 5 - Production/Stable",
@@ -23,6 +23,7 @@ classifiers = [
 requires-python = ">=3.10,<3.14"
 dependencies = [
   "dghs-imgutils==0.19.0",
+  "numpy>=1.26,<3",
   "Pillow>=11.0,<13",
   "PySide6>=6.8,<7",
 ]
@@ -37,9 +38,12 @@ Source = "https://github.com/umimi893/character-mosaic-censor"
 [project.scripts]
 character-mosaic = "character_mosaic.cli:main"
 character-mosaic-mine = "character_mosaic.miner_cli:main"
+character-mosaic-probe = "character_mosaic.semantic_probe_cli:main"
+character-mosaic-train-verifier = "character_mosaic.verifier_train_cli:main"
 
 [project.gui-scripts]
 character-mosaic-gui = "character_mosaic.gui:main"
+character-mosaic-verifier-lab = "character_mosaic.verifier_lab:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
