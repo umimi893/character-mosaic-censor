@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Iterator
+from typing import Iterator
 
 from PIL import Image
 
@@ -368,43 +368,15 @@ def classify_pseudo_label(
     evidence: CandidateEvidence,
     suppression_reason: str | None,
 ) -> tuple[str, str, str | None]:
-    """Convert body evidence into conservative pseudo-labels.
+    """Backward-compatible proxy to the canonical pseudo-label policy.
 
-    Returns ``(pseudo_label, quality_tier, negative_kind)``. Ambiguous examples
-    are deliberately quarantined instead of being forced into training data.
+    Keeping the implementation in ``pseudo_labels.py`` prevents runtime
+    learning, corpus mining, and compatibility imports from drifting into
+    different GOLD/SILVER policies.
     """
-    if evidence.decision == "suppress":
-        kind = _negative_kind(suppression_reason, evidence.negative_signals)
-        if kind is not None:
-            return "negative", "gold", kind
-        return "negative", "silver", "other"
+    from .pseudo_labels import classify_pseudo_label as canonical_classify
 
-    has_groin = any(signal.startswith(("near_pelvis:", "inside_groin_zone:")) for signal in evidence.positive_signals)
-    has_negative = bool(evidence.negative_signals)
-    if evidence.decision == "keep" and has_groin and not has_negative and evidence.detection.score >= 0.75:
-        return "positive_seed", "silver", None
-    return "quarantine", "quarantine", None
-
-
-def _negative_kind(reason: str | None, signals: Iterable[str]) -> str | None:
-    text = " ".join([reason or "", *signals]).lower()
-    mapping = (
-        ("armpit", "armpit"),
-        ("upper_back", "back"),
-        ("torso_back", "back"),
-        ("inside_torso", "torso"),
-        ("thigh", "leg"),
-        ("lower_leg", "leg"),
-        ("knee", "leg"),
-        ("inside_eye", "face"),
-        ("inside_face", "face"),
-        ("inside_head", "head"),
-        ("review_without_pelvis", "head_face"),
-    )
-    for needle, kind in mapping:
-        if needle in text:
-            return kind
-    return None
+    return canonical_classify(evidence, suppression_reason)
 
 
 def suppression_reason_map(result: ProcessResult | object) -> dict[Detection, str]:
