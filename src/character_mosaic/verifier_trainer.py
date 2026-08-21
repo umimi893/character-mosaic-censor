@@ -41,15 +41,6 @@ def _select_training_samples(
     store: VerifierStore,
     max_samples: int | None,
 ) -> tuple[list[VerifierLabelSample], dict[str, int | str | None]]:
-    """Select a clean human-labelled training set.
-
-    With no cap, use all clean positive/negative labels. With a cap, the cap is
-    interpreted as a *recent curation window*: first take the most recently
-    touched clean labels including uncertain rows, then remove uncertain rows
-    from training. This prevents old ambiguous P/N labels from silently filling
-    slots that the user intentionally marked uncertain in the latest review.
-    """
-
     if max_samples is None:
         samples = store.labeled_samples(labels=("positive", "negative"))
         return samples, {
@@ -63,8 +54,6 @@ def _select_training_samples(
         }
 
     limit = max(1, int(max_samples))
-    # VerifierStore returns labels in ascending update order. Take the tail so
-    # the user's newest review session defines the curated window.
     all_clean = store.labeled_samples(labels=("positive", "negative", "uncertain"))
     window = all_clean[-limit:]
     samples = [sample for sample in window if sample.label in {"positive", "negative"}]
@@ -125,11 +114,7 @@ def _embedding_for_sample(
         except Exception:
             cache_path.unlink(missing_ok=True)
 
-    crop = _load_context_crop(
-        sample,
-        crop_scale=crop_scale,
-        min_crop_side=min_crop_side,
-    )
+    crop = _load_context_crop(sample, crop_scale=crop_scale, min_crop_side=min_crop_side)
     if embedder is None:
         from imgutils.tagging import get_wd14_tags
 
@@ -147,15 +132,10 @@ def cross_validated_scores(
     source_ids,
     *,
     k: int,
-    temperature: float,
+    support_k: int = 3,
+    temperature: float = 0.06,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Score each row while excluding its source; return negative similarity.
-
-    The second returned array is intentionally the nearest *negative* reference
-    similarity. Runtime suppression uses the same value as its OOD guard. Rows
-    without the same minimum per-class neighbour support required at runtime are
-    marked invalid for policy selection.
-    """
+    """Return leave-source-out class margins, negative similarity and support."""
 
     matrix = np.asarray(embeddings, dtype=np.float32)
     y = np.asarray(labels, dtype=np.int8)
@@ -165,60 +145,64 @@ def cross_validated_scores(
         labels=y,
         source_ids=groups,
         k=k,
+        support_k=support_k,
         temperature=temperature,
-        suppress_threshold=0.0,
-        similarity_floor=-1.0,
+        margin_threshold=0.0,
+        negative_similarity_floor=-1.0,
     )
-    scores = np.empty(len(y), dtype=np.float32)
+    margins = np.empty(len(y), dtype=np.float32)
     negative_similarities = np.empty(len(y), dtype=np.float32)
     neighbors = np.empty(len(y), dtype=np.int32)
-    required_neighbors = min(3, max(1, int(k)))
+    required_neighbors = min(max(3, int(support_k)), max(1, int(k)))
     for index, embedding in enumerate(probe_model.embeddings):
         result = probe_model.score(embedding, exclude_source_id=int(groups[index]))
         class_neighbors = min(result.positive_neighbors, result.negative_neighbors)
-        scores[index] = result.positive_score
         neighbors[index] = class_neighbors
-        negative_similarities[index] = (
-            result.negative_similarity if class_neighbors >= required_neighbors else -1.0
-        )
-    return scores, negative_similarities, neighbors
+        if class_neighbors < required_neighbors:
+            margins[index] = np.nan
+            negative_similarities[index] = -1.0
+        else:
+            margins[index] = result.margin
+            negative_similarities[index] = result.negative_similarity
+    return margins, negative_similarities, neighbors
 
 
 def choose_conservative_policy(
-    scores,
+    margins,
     negative_similarities,
     labels,
     *,
-    max_suppress_threshold: float = 0.35,
+    min_margin_threshold: float = 0.0,
 ) -> dict:
-    """Choose a one-sided veto with zero observed positive suppressions.
+    """Choose a class-margin veto with zero observed positive suppressions.
 
-    The learned score is class-balanced, but negative training coverage is still
-    much smaller than positive coverage. Therefore a candidate may be vetoed
-    only when it is both below the positive-score threshold and sufficiently
-    similar to a known human-labelled negative example.
+    Runtime uses ``margin > threshold`` where positive margin means the candidate
+    is closer to the negative class than to the positive class. The threshold is
+    placed just above the largest observed positive margin and is never allowed
+    below ``min_margin_threshold`` (zero by default), so negative support must
+    actually beat positive support. A direct negative-similarity floor remains
+    as an OOD guard.
     """
 
-    p = np.asarray(scores, dtype=np.float64)
+    margin = np.asarray(margins, dtype=np.float64)
     neg_sim = np.asarray(negative_similarities, dtype=np.float64)
     y = np.asarray(labels, dtype=np.int8)
-    valid = np.isfinite(p) & np.isfinite(neg_sim) & (neg_sim > -0.999)
+    valid = np.isfinite(margin) & np.isfinite(neg_sim) & (neg_sim > -0.999)
     positives = valid & (y == 1)
     negatives = valid & (y == 0)
     if not np.any(positives) or not np.any(negatives):
         raise ValueError("both positive and negative validation rows are required")
 
-    # Runtime uses score < threshold. Pinning the cutoff to the smallest
-    # observed positive score preserves every validation positive.
-    threshold = min(float(max_suppress_threshold), float(np.min(p[positives])))
-    negative_candidates = negatives & (p < threshold)
+    max_positive_margin = float(np.max(margin[positives]))
+    threshold = max(float(min_margin_threshold), max_positive_margin + 1e-6)
+    negative_candidates = negatives & (margin > threshold)
     if np.any(negative_candidates):
         floor = float(np.quantile(neg_sim[negative_candidates], 0.10)) - 0.01
         floor = max(-1.0, min(1.0, floor))
     else:
         floor = 1.0
 
-    suppressed = valid & (p < threshold) & (neg_sim >= floor)
+    suppressed = valid & (margin > threshold) & (neg_sim >= floor)
     positive_count = int(np.sum(positives))
     negative_count = int(np.sum(negatives))
     false_suppressed = int(np.sum(suppressed & positives))
@@ -229,8 +213,9 @@ def choose_conservative_policy(
     negative_precision = negatives_suppressed / max(1, suppressed_total)
 
     return {
-        "suppress_threshold": threshold,
-        "similarity_floor": floor,
+        "margin_threshold": threshold,
+        "negative_similarity_floor": floor,
+        "max_observed_positive_margin": max_positive_margin,
         "positive_count": positive_count,
         "negative_count": negative_count,
         "positive_false_suppressed": false_suppressed,
@@ -239,6 +224,10 @@ def choose_conservative_policy(
         "negative_suppression_rate": negative_suppression_rate,
         "negative_precision_among_suppressed": negative_precision,
         "valid_rows": int(np.sum(valid)),
+        "mean_positive_margin": float(np.mean(margin[positives])),
+        "mean_negative_margin": float(np.mean(margin[negatives])),
+        "median_positive_margin": float(np.median(margin[positives])),
+        "median_negative_margin": float(np.median(margin[negatives])),
     }
 
 
@@ -250,8 +239,9 @@ def train_verifier(
     crop_scale: float = 3.8,
     min_crop_side: int = 320,
     k: int = 9,
+    support_k: int = 3,
     temperature: float = 0.06,
-    max_suppress_threshold: float = 0.35,
+    min_margin_threshold: float = 0.0,
     max_samples: int | None = None,
     rebuild_cache: bool = False,
     progress: ProgressCallback | None = None,
@@ -297,14 +287,12 @@ def train_verifier(
             if progress:
                 progress(index, total, sample, state)
         except Exception as exc:
-            failures.append(
-                {
-                    "fingerprint": sample.fingerprint,
-                    "source": sample.source_path,
-                    "label": sample.label,
-                    "error": f"{type(exc).__name__}: {exc}",
-                }
-            )
+            failures.append({
+                "fingerprint": sample.fingerprint,
+                "source": sample.source_path,
+                "label": sample.label,
+                "error": f"{type(exc).__name__}: {exc}",
+            })
             if progress:
                 progress(index, total, sample, f"error:{type(exc).__name__}")
 
@@ -317,18 +305,19 @@ def train_verifier(
     if counts["positive"] < 2 or counts["negative"] < 2:
         raise ValueError("今回の選択範囲内に読み込み可能な本物/誤検出ラベルがそれぞれ2件以上必要です。")
 
-    cv_scores, cv_negative_similarities, cv_neighbors = cross_validated_scores(
+    cv_margins, cv_negative_similarities, cv_neighbors = cross_validated_scores(
         matrix,
         y,
         groups,
         k=k,
+        support_k=support_k,
         temperature=temperature,
     )
     policy = choose_conservative_policy(
-        cv_scores,
+        cv_margins,
         cv_negative_similarities,
         y,
-        max_suppress_threshold=max_suppress_threshold,
+        min_margin_threshold=min_margin_threshold,
     )
 
     model = VerifierKnnModel(
@@ -336,9 +325,10 @@ def train_verifier(
         labels=y,
         source_ids=groups,
         k=k,
+        support_k=support_k,
         temperature=temperature,
-        suppress_threshold=float(policy["suppress_threshold"]),
-        similarity_floor=float(policy["similarity_floor"]),
+        margin_threshold=float(policy["margin_threshold"]),
+        negative_similarity_floor=float(policy["negative_similarity_floor"]),
         model_name=model_name,
         crop_scale=crop_scale,
         min_crop_side=min_crop_side,
@@ -352,13 +342,15 @@ def train_verifier(
         and policy["negative_precision_among_suppressed"] >= 0.98
         and policy["negative_suppression_rate"] >= 0.20
     )
+    required_neighbors = min(max(3, int(support_k)), max(1, int(k)))
     report = {
-        "schema": 2,
-        "model_type": "wd14_embedding_class_balanced_distinct_source_knn",
+        "schema": 3,
+        "model_type": "wd14_embedding_distinct_source_class_margin_knn",
         "model_name": model_name,
         "crop_scale": float(crop_scale),
         "min_crop_side": int(min_crop_side),
         "k_per_class": int(k),
+        "support_k": int(support_k),
         "temperature": float(temperature),
         "coverage": coverage,
         "manual_labels": label_stats,
@@ -369,16 +361,16 @@ def train_verifier(
         "embedding_failures": failures,
         "cross_validation": {
             **policy,
-            "rows_without_required_class_neighbors": int(np.sum(cv_neighbors < min(3, max(1, int(k))))),
+            "rows_without_required_class_neighbors": int(np.sum(cv_neighbors < required_neighbors)),
             "mean_negative_similarity": float(np.mean(cv_negative_similarities[cv_negative_similarities > -0.999]))
             if np.any(cv_negative_similarities > -0.999)
             else -1.0,
         },
         "activation_recommended": activation_recommended,
         "activation_rule": (
-            "candidate may be suppressed only when class-balanced positive_score is below "
-            "suppress_threshold and nearest-negative similarity is above similarity_floor; "
-            "at least three distinct-source neighbors per class and recall safety gates remain required"
+            "candidate may be suppressed only when negative_support - positive_support exceeds "
+            "the zero-FN leave-source-out margin threshold and nearest-negative similarity is above "
+            "the OOD floor; distinct-source class support and recall safety gates remain required"
         ),
         "fingerprints": fingerprints,
         "model_path": str(model_path),
