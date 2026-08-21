@@ -69,8 +69,8 @@ def main(argv=None) -> int:
         f"negative precision={cv['negative_precision_among_suppressed']:.2%}"
     )
     print(
-        f"Policy: positive_score < {cv['suppress_threshold']:.4f} and "
-        f"similarity >= {cv['similarity_floor']:.4f}"
+        f"Policy: class-balanced positive_score < {cv['suppress_threshold']:.4f} and "
+        f"negative_similarity >= {cv['similarity_floor']:.4f}"
     )
     print(f"Activation recommended: {'YES' if report['activation_recommended'] else 'NO'}")
     print(f"Model: {result.model_path}")
