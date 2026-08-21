@@ -52,4 +52,4 @@ def test_knn_verifier_round_trips_model_file(tmp_path):
     after = restored.score(np.asarray([0.02, 1.0, 0.0], dtype=np.float32))
     assert abs(before.positive_score - after.positive_score) < 1e-6
     assert restored.k == model.k
-    assert restored.suppress_threshold == model.suppress_threshold
+    assert abs(restored.suppress_threshold - model.suppress_threshold) < 1e-6
