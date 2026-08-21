@@ -17,6 +17,25 @@ _ARMPIT_RADIUS_RATIO = 0.17
 _GROIN_WIDTH_RATIO = 0.32
 _GROIN_DEPTH_RATIO = 0.36
 
+# These are pose/body-location vetoes that a later, stronger groin/pelvis
+# protection is allowed to rescue. Semantic face/head suppressions, product
+# review policy, and Negative Memory are intentionally not included.
+_RESCUABLE_BODY_SUPPRESSIONS = frozenset({
+    "inside_torso_back",
+    "near_right_knee",
+    "near_left_knee",
+    "near_right_armpit",
+    "near_left_armpit",
+    "inside_upper_back",
+    "inside_torso",
+    "near_right_armpit_v2",
+    "near_left_armpit_v2",
+    "on_right_thigh",
+    "on_left_thigh",
+    "on_right_lower_leg",
+    "on_left_lower_leg",
+})
+
 
 class GeometryV2Detector:
     """Apply pose-derived hard-negative geometry after the normal body reasoner."""
@@ -58,7 +77,9 @@ def apply_body_geometry_v2(
     Safety rules:
     * a candidate inside any reliable directional groin zone is protected;
     * pelvis evidence from another person always wins for close-contact scenes;
-    * unmatched candidates fail open;
+    * those positive protections may rescue an earlier pose/body suppression,
+      but never semantic face/head, review-policy, or memory suppressions;
+    * unmatched candidates fail open for new Geometry-v2 vetoes;
     * overlapping-person scenes fail open unless every matched usable person
       independently classifies the candidate as a hard-negative body region;
     * missing shoulders/hips/knees simply removes that geometry signal.
@@ -77,25 +98,50 @@ def apply_body_geometry_v2(
     for evidence in result.evidence:
         detection = evidence.detection
         previous = existing_suppressed.get(detection)
+        matched = tuple(idx for idx in evidence.matched_persons if idx in people)
+
+        pelvis_people = _signal_people(evidence.positive_signals, "near_pelvis")
+        protected_by_other_person = bool(matched) and any(
+            person not in matched for person in pelvis_people
+        )
+
+        groin_hits = [
+            person_index
+            for person_index in matched
+            if _candidate_in_groin(detection.box, people[person_index])
+        ]
+
         if previous is not None:
+            # BodyReasoning runs before Geometry v2. Let the stronger v1.4
+            # positive protections rescue only earlier pose/body-location vetoes
+            # so the documented precedence is true across detector layers.
+            if (
+                previous.reason in _RESCUABLE_BODY_SUPPRESSIONS
+                and (protected_by_other_person or groin_hits)
+            ):
+                final = _protected_evidence(evidence, groin_hits)
+                evidence_out.append(final)
+                kept.append(detection)
+                continue
+
             suppressed.append(previous)
             evidence_out.append(evidence)
             continue
 
-        matched = tuple(idx for idx in evidence.matched_persons if idx in people)
-        # No reliable person association means the geometry is not entitled to
-        # veto the base detector.
+        # No reliable person association means Geometry v2 is not entitled to
+        # create a new veto over the base detector.
         if not matched:
             evidence_out.append(evidence)
             kept.append(detection)
             continue
 
-        pelvis_people = _signal_people(evidence.positive_signals, "near_pelvis")
-        if any(person not in matched for person in pelvis_people):
+        if protected_by_other_person:
             # Preserve the important oral/close-contact case where a candidate
             # overlaps one person's body but is plausibly near another person's
             # pelvis.
-            evidence_out.append(evidence)
+            evidence_out.append(
+                evidence if evidence.decision == "keep" else replace(evidence, decision="keep")
+            )
             kept.append(detection)
             continue
 
@@ -105,16 +151,8 @@ def apply_body_geometry_v2(
         # hard-negative geometry. The zone is directional (below the hip line),
         # unlike the older circular pelvis distance check, so lower-back points
         # are not accidentally protected merely because they are near the hips.
-        groin_hits = [
-            person_index
-            for person_index in candidate_people
-            if _candidate_in_groin(detection.box, people[person_index])
-        ]
         if groin_hits:
-            positive = tuple(evidence.positive_signals) + tuple(
-                f"inside_groin_zone:p{idx}" for idx in groin_hits
-            )
-            final = replace(evidence, decision="keep", positive_signals=positive)
+            final = _protected_evidence(evidence, groin_hits)
             evidence_out.append(final)
             kept.append(detection)
             continue
@@ -164,6 +202,18 @@ def apply_body_geometry_v2(
         evidence=tuple(evidence_out),
         body_regions=tuple(result.body_regions) + tuple(derived_regions),
     )
+
+
+def _protected_evidence(
+    evidence: CandidateEvidence,
+    groin_hits: Sequence[int],
+) -> CandidateEvidence:
+    positive = list(evidence.positive_signals)
+    for person_index in groin_hits:
+        signal = f"inside_groin_zone:p{person_index}"
+        if signal not in positive:
+            positive.append(signal)
+    return replace(evidence, decision="keep", positive_signals=tuple(positive))
 
 
 def _people_from_pose_points(points: Iterable[PosePoint]) -> dict[int, dict[str, tuple[float, float]]]:
