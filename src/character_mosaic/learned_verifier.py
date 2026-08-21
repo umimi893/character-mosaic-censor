@@ -36,6 +36,10 @@ class LearnedVerifierDiagnostic:
     neighbors: int
     would_suppress: bool
     protected: bool
+    positive_similarity: float = -1.0
+    negative_similarity: float = -1.0
+    positive_neighbors: int = 0
+    negative_neighbors: int = 0
     error: str | None = None
 
 
@@ -191,9 +195,14 @@ def apply_learned_verifier(
                 embedder(crop, model_name=model.model_name, fmt="embedding")
             )
             would_suppress, score = model.should_suppress(embedding)
+            pos_sim = float(getattr(score, "positive_similarity", score.max_similarity))
+            neg_sim = float(getattr(score, "negative_similarity", score.max_similarity))
+            pos_n = int(getattr(score, "positive_neighbors", score.neighbors))
+            neg_n = int(getattr(score, "negative_neighbors", score.neighbors))
             signal = (
                 f"verifier_{mode}:p={score.positive_score:.3f}:"
-                f"sim={score.max_similarity:.3f}:n={score.neighbors}"
+                f"sim={score.max_similarity:.3f}:psim={pos_sim:.3f}:nsim={neg_sim:.3f}:"
+                f"pn={pos_n}:nn={neg_n}"
             )
             annotations[evidence.detection] = signal
             diagnostics.append(
@@ -205,6 +214,10 @@ def apply_learned_verifier(
                     neighbors=score.neighbors,
                     would_suppress=bool(would_suppress),
                     protected=protected,
+                    positive_similarity=pos_sim,
+                    negative_similarity=neg_sim,
+                    positive_neighbors=pos_n,
+                    negative_neighbors=neg_n,
                 )
             )
             if mode != "active" or not would_suppress or protected:
@@ -239,6 +252,7 @@ def apply_learned_verifier(
     if not annotations and not decisions:
         return result, tuple(diagnostics)
 
+    diagnostic_by_detection = {item.detection: item for item in diagnostics}
     evidence_out: list[CandidateEvidence] = []
     new_suppressions: list[AnatomySuppression] = []
     for evidence in result.evidence:
@@ -253,9 +267,10 @@ def apply_learned_verifier(
             evidence_out.append(replace(evidence, positive_signals=positive))
             continue
 
+        diagnostic = diagnostic_by_detection[evidence.detection]
         negative_signal = (
-            f"{_REASON}:p={next(d.positive_score for d in diagnostics if d.detection == evidence.detection):.3f}:"
-            f"sim={next(d.max_similarity for d in diagnostics if d.detection == evidence.detection):.3f}"
+            f"{_REASON}:p={diagnostic.positive_score:.3f}:"
+            f"nsim={diagnostic.negative_similarity:.3f}"
         )
         evidence_out.append(
             replace(
