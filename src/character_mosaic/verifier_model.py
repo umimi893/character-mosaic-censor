@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -10,7 +11,7 @@ import numpy as np
 from .experience_store import default_learning_root
 
 
-_SCORE_VERSION = 2
+_SCORE_VERSION = 3
 
 
 def default_verifier_dir() -> Path:
@@ -52,30 +53,36 @@ class VerifierScore:
     negative_similarity: float = -1.0
     positive_neighbors: int = 0
     negative_neighbors: int = 0
+    positive_support: float = -1.0
+    negative_support: float = -1.0
+    margin: float = 0.0
 
 
 @dataclass
 class VerifierKnnModel:
-    """One-sided visual verifier backed by human-labelled WD14 embeddings.
+    """Conservative human-labelled WD14 verifier using class-relative margin.
 
-    Version 2 deliberately selects neighbours separately for the positive and
-    negative classes. The user corpus is naturally very imbalanced (many true
-    targets, relatively few false positives), so a single global top-k lets the
-    denser positive class dominate even for unseen knee/armpit/skin creases.
+    Version 3 keeps the class-balanced/distinct-source neighbour search from v2,
+    but no longer turns two dense high-similarity clouds into a probability by
+    averaging exponential weights. In real anime crops both classes can have
+    cosine similarities around 0.9+, making that probability unnecessarily
+    compressed and leaving no safe negative vetoes.
 
-    Each class gets the same prior weight here: up to ``k`` distinct source
-    images are selected per class, then their temperature-weighted similarity
-    evidence is compared. Runtime suppression also requires direct similarity
-    to known negative examples, not merely similarity to either class.
+    Instead each class is represented by the mean similarity of its nearest
+    ``support_k`` distinct source images. ``margin`` is negative_support minus
+    positive_support. A candidate may be vetoed only when that margin exceeds a
+    leave-source-out threshold learned without suppressing any observed positive,
+    and it is also directly similar enough to a known negative reference.
     """
 
     embeddings: np.ndarray
     labels: np.ndarray
     source_ids: np.ndarray
     k: int = 9
+    support_k: int = 3
     temperature: float = 0.06
-    suppress_threshold: float = 0.20
-    similarity_floor: float = 0.0
+    margin_threshold: float = 0.0
+    negative_similarity_floor: float = 0.0
     model_name: str = "SwinV2_v3"
     crop_scale: float = 3.8
     min_crop_side: int = 320
@@ -89,9 +96,10 @@ class VerifierKnnModel:
         if not set(int(value) for value in np.unique(self.labels)).issubset({0, 1}):
             raise ValueError("verifier labels must be binary")
         self.k = max(1, int(self.k))
+        self.support_k = max(1, min(int(self.support_k), self.k))
         self.temperature = max(1e-4, float(self.temperature))
-        self.suppress_threshold = float(self.suppress_threshold)
-        self.similarity_floor = float(self.similarity_floor)
+        self.margin_threshold = float(self.margin_threshold)
+        self.negative_similarity_floor = float(self.negative_similarity_floor)
 
     def _select_class_neighbors(
         self,
@@ -110,9 +118,6 @@ class VerifierKnnModel:
             source_id = int(self.source_ids[index])
             if exclude_source_id is not None and source_id == int(exclude_source_id):
                 continue
-            # One source image contributes at most one vote to each class. A
-            # source may legitimately contain both a true target and a false
-            # positive candidate, so the de-duplication is class-local.
             if source_id in seen_sources:
                 continue
             seen_sources.add(source_id)
@@ -120,6 +125,13 @@ class VerifierKnnModel:
             if len(selected) >= self.k:
                 break
         return selected
+
+    def _support(self, similarities: np.ndarray, indices: list[int]) -> float:
+        if not indices:
+            return -1.0
+        values = np.sort(similarities[indices].astype(np.float64))[::-1]
+        width = min(self.support_k, len(values))
+        return float(np.mean(values[:width]))
 
     def score(self, embedding, *, exclude_source_id: int | None = None) -> VerifierScore:
         query = normalize_embedding(embedding)
@@ -141,53 +153,53 @@ class VerifierKnnModel:
 
         pos_n = len(positive_idx)
         neg_n = len(negative_idx)
+        selected = positive_idx + negative_idx
+        max_similarity = float(np.max(similarities[selected])) if selected else -1.0
+        pos_max = float(np.max(similarities[positive_idx])) if positive_idx else -1.0
+        neg_max = float(np.max(similarities[negative_idx])) if negative_idx else -1.0
+        pos_support = self._support(similarities, positive_idx)
+        neg_support = self._support(similarities, negative_idx)
+
         if not positive_idx or not negative_idx:
-            selected = positive_idx + negative_idx
-            max_similarity = float(np.max(similarities[selected])) if selected else -1.0
             return VerifierScore(
                 positive_score=0.5,
                 max_similarity=max_similarity,
                 neighbors=len(selected),
-                positive_similarity=(float(np.max(similarities[positive_idx])) if positive_idx else -1.0),
-                negative_similarity=(float(np.max(similarities[negative_idx])) if negative_idx else -1.0),
+                positive_similarity=pos_max,
+                negative_similarity=neg_max,
                 positive_neighbors=pos_n,
                 negative_neighbors=neg_n,
+                positive_support=pos_support,
+                negative_support=neg_support,
+                margin=0.0,
             )
 
-        pos_sims = similarities[positive_idx].astype(np.float64)
-        neg_sims = similarities[negative_idx].astype(np.float64)
-        pos_max = float(np.max(pos_sims))
-        neg_max = float(np.max(neg_sims))
-        global_max = max(pos_max, neg_max)
-
-        # Equal class priors: average evidence inside each class instead of
-        # summing all neighbours together. This removes the 30:1-ish corpus
-        # imbalance from the score while preserving visual similarity strength.
-        pos_weights = np.exp(np.clip((pos_sims - global_max) / self.temperature, -50.0, 0.0))
-        neg_weights = np.exp(np.clip((neg_sims - global_max) / self.temperature, -50.0, 0.0))
-        pos_evidence = float(np.mean(pos_weights))
-        neg_evidence = float(np.mean(neg_weights))
-        denom = pos_evidence + neg_evidence
-        positive_score = pos_evidence / max(denom, 1e-12)
-
+        margin = float(neg_support - pos_support)
+        # Keep an intuitive p-like diagnostic without using it for the veto.
+        # Positive margin means negative support is stronger, hence p < 0.5.
+        scaled = max(-50.0, min(50.0, margin / self.temperature))
+        positive_score = 1.0 / (1.0 + math.exp(scaled))
         return VerifierScore(
-            positive_score=max(0.0, min(1.0, float(positive_score))),
-            max_similarity=global_max,
+            positive_score=float(positive_score),
+            max_similarity=max_similarity,
             neighbors=pos_n + neg_n,
             positive_similarity=pos_max,
             negative_similarity=neg_max,
             positive_neighbors=pos_n,
             negative_neighbors=neg_n,
+            positive_support=pos_support,
+            negative_support=neg_support,
+            margin=margin,
         )
 
     def should_suppress(self, embedding) -> tuple[bool, VerifierScore]:
         score = self.score(embedding)
-        required_neighbors = min(3, self.k)
+        required_neighbors = min(max(3, self.support_k), self.k)
         decision = (
             score.positive_neighbors >= required_neighbors
             and score.negative_neighbors >= required_neighbors
-            and score.negative_similarity >= self.similarity_floor
-            and score.positive_score < self.suppress_threshold
+            and score.negative_similarity >= self.negative_similarity_floor
+            and score.margin > self.margin_threshold
         )
         return bool(decision), score
 
@@ -201,9 +213,10 @@ class VerifierKnnModel:
             labels=self.labels.astype(np.int8),
             source_ids=self.source_ids.astype(np.int64),
             k=np.asarray([self.k], dtype=np.int32),
+            support_k=np.asarray([self.support_k], dtype=np.int32),
             temperature=np.asarray([self.temperature], dtype=np.float32),
-            suppress_threshold=np.asarray([self.suppress_threshold], dtype=np.float32),
-            similarity_floor=np.asarray([self.similarity_floor], dtype=np.float32),
+            margin_threshold=np.asarray([self.margin_threshold], dtype=np.float32),
+            negative_similarity_floor=np.asarray([self.negative_similarity_floor], dtype=np.float32),
             model_name=np.asarray([self.model_name]),
             crop_scale=np.asarray([self.crop_scale], dtype=np.float32),
             min_crop_side=np.asarray([self.min_crop_side], dtype=np.int32),
@@ -215,15 +228,16 @@ class VerifierKnnModel:
         path = Path(path or default_verifier_model_path())
         with np.load(path, allow_pickle=False) as data:
             if "score_version" not in data.files or int(data["score_version"][0]) != _SCORE_VERSION:
-                raise ValueError("legacy verifier model requires retraining for class-balanced scoring")
+                raise ValueError("legacy verifier model requires retraining for v3 class-margin scoring")
             return cls(
                 embeddings=np.asarray(data["embeddings"], dtype=np.float32),
                 labels=np.asarray(data["labels"], dtype=np.int8),
                 source_ids=np.asarray(data["source_ids"], dtype=np.int64),
                 k=int(data["k"][0]),
+                support_k=int(data["support_k"][0]),
                 temperature=float(data["temperature"][0]),
-                suppress_threshold=float(data["suppress_threshold"][0]),
-                similarity_floor=float(data["similarity_floor"][0]),
+                margin_threshold=float(data["margin_threshold"][0]),
+                negative_similarity_floor=float(data["negative_similarity_floor"][0]),
                 model_name=str(data["model_name"][0]),
                 crop_scale=float(data["crop_scale"][0]),
                 min_crop_side=int(data["min_crop_side"][0]),
