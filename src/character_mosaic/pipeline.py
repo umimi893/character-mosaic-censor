@@ -23,6 +23,7 @@ from .pipeline_logging import JsonlRunLogger, write_jsonl_log
 from .pipeline_processor import BatchProcessor as _BatchProcessor
 from .pipeline_processor import discover_images, validate_processing_paths
 from .pipeline_review import write_review_html
+from .safety_gate import SafetyGateDetector
 
 
 class BatchProcessor(_BatchProcessor):
@@ -36,7 +37,8 @@ class BatchProcessor(_BatchProcessor):
                 AnatomyFilterConfig(enabled=self.config.anatomy_filter),
             )
             geometry = GeometryV2Detector(body)
-            arbitration = CandidateArbitrationDetector(geometry)
+            safety = SafetyGateDetector(geometry)
+            arbitration = CandidateArbitrationDetector(safety)
             self.detector = NegativeMemoryDetector(
                 arbitration,
                 enabled=bool(getattr(self.config, "learning_enabled", True)),
