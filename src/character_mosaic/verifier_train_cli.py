@@ -16,8 +16,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--crop-scale", type=float, default=3.8)
     parser.add_argument("--min-crop-side", type=int, default=320)
     parser.add_argument("--k", type=int, default=9)
+    parser.add_argument("--support-k", type=int, default=3)
     parser.add_argument("--temperature", type=float, default=0.06)
-    parser.add_argument("--max-suppress-threshold", type=float, default=0.35)
+    parser.add_argument("--min-margin-threshold", type=float, default=0.0)
     parser.add_argument("--max-samples", type=int, default=None)
     parser.add_argument("--rebuild-cache", action="store_true")
     return parser
@@ -38,8 +39,9 @@ def main(argv=None) -> int:
         crop_scale=args.crop_scale,
         min_crop_side=args.min_crop_side,
         k=args.k,
+        support_k=args.support_k,
         temperature=args.temperature,
-        max_suppress_threshold=args.max_suppress_threshold,
+        min_margin_threshold=args.min_margin_threshold,
         max_samples=args.max_samples,
         rebuild_cache=args.rebuild_cache,
         progress=progress,
@@ -76,8 +78,12 @@ def main(argv=None) -> int:
         f"negative precision={cv['negative_precision_among_suppressed']:.2%}"
     )
     print(
-        f"Policy: class-balanced positive_score < {cv['suppress_threshold']:.4f} and "
-        f"negative_similarity >= {cv['similarity_floor']:.4f}"
+        f"Margin means: positive={cv['mean_positive_margin']:+.4f} / "
+        f"negative={cv['mean_negative_margin']:+.4f}"
+    )
+    print(
+        f"Policy: negative_support-positive_support > {cv['margin_threshold']:+.4f} and "
+        f"negative_similarity >= {cv['negative_similarity_floor']:.4f}"
     )
     print(f"Activation recommended: {'YES' if report['activation_recommended'] else 'NO'}")
     print(f"Model: {result.model_path}")
