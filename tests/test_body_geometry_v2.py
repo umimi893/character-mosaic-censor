@@ -117,6 +117,14 @@ def test_groin_zone_does_not_override_face_semantic_suppression():
     assert final.suppressed[0].reason == "inside_eye_face_head"
 
 
+def test_groin_zone_does_not_override_review_policy_suppression():
+    detection, result = _suppressed_result((90, 222, 110, 242), "review_without_pelvis")
+    final = apply_body_geometry_v2(result, (300, 450))
+    assert final.kept == tuple()
+    assert final.suppressed[0].detection == detection
+    assert final.suppressed[0].reason == "review_without_pelvis"
+
+
 def test_unmatched_candidate_fails_open():
     detection, result = _result((90, 120, 110, 150), matched=())
     final = apply_body_geometry_v2(result, (300, 450))
