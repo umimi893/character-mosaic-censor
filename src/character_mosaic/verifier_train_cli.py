@@ -47,6 +47,7 @@ def main(argv=None) -> int:
     report = result.report
     coverage = report["coverage"]
     labels = report["manual_labels"]
+    selection = report["selection"]
     usable = report["usable_training_rows"]
     cv = report["cross_validation"]
 
@@ -59,6 +60,12 @@ def main(argv=None) -> int:
         f"Manual labels: positive={labels['positive']} negative={labels['negative']} "
         f"uncertain={labels['uncertain']}"
     )
+    if selection["mode"] == "latest_clean_label_window":
+        print(
+            f"Curated window: latest {selection['window_total']}/{selection['window_limit']} clean labels -> "
+            f"positive={selection['window_positive']} negative={selection['window_negative']} "
+            f"uncertain={selection['window_uncertain']}"
+        )
     print(
         f"Usable images: positive={usable['positive']} negative={usable['negative']} "
         f"failures={len(report['embedding_failures'])}"
