@@ -17,6 +17,7 @@ from .body_reasoning import BodyReasoningDetector
 from .candidate_arbitration import CandidateArbitrationDetector
 from .experience_recorder import record_process_experience
 from .i18n import t
+from .learned_verifier import LearnedVerifierDetector
 from .negative_memory import NegativeMemoryDetector
 from .pipeline_config import PipelineConfig
 from .pipeline_logging import JsonlRunLogger, write_jsonl_log
@@ -27,7 +28,7 @@ from .safety_gate import SafetyGateDetector
 
 
 class BatchProcessor(_BatchProcessor):
-    """Batch processor with body geometry and persistent negative memory."""
+    """Batch processor with body geometry, memory, and learned verification."""
 
     def __init__(self, config: PipelineConfig | None = None, detector=None):
         super().__init__(config=config, detector=detector)
@@ -39,9 +40,17 @@ class BatchProcessor(_BatchProcessor):
             geometry = GeometryV2Detector(body)
             safety = SafetyGateDetector(geometry)
             arbitration = CandidateArbitrationDetector(safety)
-            self.detector = NegativeMemoryDetector(
+            memory = NegativeMemoryDetector(
                 arbitration,
                 enabled=bool(getattr(self.config, "learning_enabled", True)),
+            )
+            # Learned verifier is intentionally the outermost decision layer.
+            # It sees the final legacy KEEP set and may only add a conservative
+            # human-labelled veto. Its own recall protections prevent it from
+            # undoing the groin/pelvis safety signals established underneath.
+            self.detector = LearnedVerifierDetector(
+                memory,
+                mode=str(getattr(self.config, "verifier_mode", "auto")),
             )
 
     def _reset_anatomy_diagnostics(self) -> None:
