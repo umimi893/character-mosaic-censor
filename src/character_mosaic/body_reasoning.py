@@ -25,16 +25,17 @@ _TORSO_INSET_X = 0.10
 _TORSO_INSET_TOP = 0.06
 _TORSO_INSET_BOTTOM = 0.02
 
-# Fallback for a specific production failure mode: retry-only low-confidence
-# detections can land on a waist/flank crease while DWPose loses every lower-
-# body landmark.  In that degraded state the pose geometry must still fail
-# open generally; only a narrow, head/person-anchored upper-body band is safe
-# enough to veto.
-_RETRY_FALLBACK_MAX_SCORE = 0.40
-_RETRY_FALLBACK_MAX_BODY_FRACTION = 0.35
-_RETRY_FALLBACK_MIN_HEAD_PERSON_RATIO = 0.18
-_RETRY_FALLBACK_MAX_HEAD_PERSON_RATIO = 0.42
-_RETRY_FALLBACK_LOWER_LABELS = frozenset({
+# Fallback for a specific production failure mode: low-confidence detections
+# from auxiliary-only passes can land on a waist/flank/armpit crease while
+# DWPose loses every lower-body landmark. In that degraded state the pose
+# geometry must still fail open generally; only a narrow, head/person-anchored
+# upper-body band is safe enough to veto. A tile candidate that was also seen
+# by the full pass is deliberately excluded from this fallback.
+_AUX_FALLBACK_MAX_SCORE = 0.40
+_AUX_FALLBACK_MAX_BODY_FRACTION = 0.35
+_AUX_FALLBACK_MIN_HEAD_PERSON_RATIO = 0.18
+_AUX_FALLBACK_MAX_HEAD_PERSON_RATIO = 0.42
+_AUX_FALLBACK_LOWER_LABELS = frozenset({
     "right_hip",
     "left_hip",
     "right_knee",
@@ -55,9 +56,9 @@ class BodyReasoningDetector:
       false positive instead of being sent through as a censor box;
     * a candidate strongly contained by the same person's shoulder-to-hip
       torso/back core is suppressed;
-    * a retry-only low-confidence upper-body candidate can be suppressed when
-      lower-body pose is entirely missing and person/head geometry still makes
-      the candidate implausibly high for a groin target.
+    * a low-confidence auxiliary-only upper-body candidate can be suppressed
+      when lower-body pose is entirely missing and person/head geometry still
+      makes the candidate implausibly high for a groin target.
 
     A reliable pelvis from another person always wins.  This keeps close-contact
     and oral scenes safe when one person's legitimate target overlaps another
@@ -221,28 +222,28 @@ def enhance_anatomy_result(
             continue
 
         # DWPose sometimes returns only the head/upper body. A low-confidence
-        # retry-only detector hit on the upper part of the body would otherwise
-        # survive solely because the safer pose rules cannot construct a pelvis
-        # or torso. Suppress only the narrow real-world failure mode where one
-        # person is matched, no lower-body landmark exists, no positive anatomy
-        # signal exists beyond detector confidence, and the candidate sits in
-        # the upper 35% of the body below a plausible head box.
-        fallback_hit = _upper_body_retry_fallback(
+        # auxiliary-only detector hit on the upper part of the body would
+        # otherwise survive solely because the safer pose rules cannot build a
+        # pelvis or torso. Suppress only the narrow real-world failure mode
+        # where one person is matched, no lower-body landmark exists, no
+        # positive anatomy signal exists beyond detector confidence, and the
+        # candidate sits in the upper 35% of the body below a plausible head.
+        fallback_hit = _upper_body_aux_fallback(
             evidence,
             body_regions,
             result.pose_points,
         )
         if fallback_hit is not None:
-            person_index, strength = fallback_hit
+            person_index, strength, reason = fallback_hit
             negative = tuple(evidence.negative_signals) + (
-                f"upper_body_retry_without_lower_pose:p{person_index}:{strength:.3f}",
+                f"{reason}:p{person_index}:{strength:.3f}",
             )
             final = replace(evidence, decision="suppress", negative_signals=negative)
             evidence_out.append(final)
             suppressed.append(
                 AnatomySuppression(
                     detection=detection,
-                    reason="upper_body_retry_without_lower_pose",
+                    reason=reason,
                     person_index=person_index,
                     joint_distance_ratio=max(0.0, 1.0 - strength),
                     pelvis_distance_ratio=999.0,
@@ -306,17 +307,18 @@ def _derive_torso_regions(
     return regions
 
 
-def _upper_body_retry_fallback(
+def _upper_body_aux_fallback(
     evidence: CandidateEvidence,
     body_regions: Sequence[BodyRegion],
     pose_points: Sequence[PosePoint],
-) -> tuple[int, float] | None:
+) -> tuple[int, float, str] | None:
     detection = evidence.detection
     if evidence.decision != "keep":
         return None
-    if not detection.source.startswith("retry_"):
+    reason = _auxiliary_source_reason(detection.source)
+    if reason is None:
         return None
-    if detection.score > _RETRY_FALLBACK_MAX_SCORE:
+    if detection.score > _AUX_FALLBACK_MAX_SCORE:
         return None
     if len(evidence.matched_persons) != 1:
         return None
@@ -331,7 +333,7 @@ def _upper_body_retry_fallback(
     person_index = int(evidence.matched_persons[0])
     if any(
         point.person_index == person_index
-        and point.label in _RETRY_FALLBACK_LOWER_LABELS
+        and point.label in _AUX_FALLBACK_LOWER_LABELS
         for point in pose_points
     ):
         return None
@@ -350,9 +352,9 @@ def _upper_body_retry_fallback(
 
     head_person_ratio = head_height / person_height
     if not (
-        _RETRY_FALLBACK_MIN_HEAD_PERSON_RATIO
+        _AUX_FALLBACK_MIN_HEAD_PERSON_RATIO
         <= head_person_ratio
-        <= _RETRY_FALLBACK_MAX_HEAD_PERSON_RATIO
+        <= _AUX_FALLBACK_MAX_HEAD_PERSON_RATIO
     ):
         return None
 
@@ -367,13 +369,21 @@ def _upper_body_retry_fallback(
     if body_span < 32.0:
         return None
     body_fraction = (cy - hy1) / body_span
-    if not (0.0 <= body_fraction <= _RETRY_FALLBACK_MAX_BODY_FRACTION):
+    if not (0.0 <= body_fraction <= _AUX_FALLBACK_MAX_BODY_FRACTION):
         return None
 
     strength = 1.0 - (
-        body_fraction / max(_RETRY_FALLBACK_MAX_BODY_FRACTION, 1e-9)
+        body_fraction / max(_AUX_FALLBACK_MAX_BODY_FRACTION, 1e-9)
     )
-    return person_index, max(0.0, min(1.0, strength))
+    return person_index, max(0.0, min(1.0, strength)), reason
+
+
+def _auxiliary_source_reason(source: str) -> str | None:
+    if source.startswith("retry_"):
+        return "upper_body_retry_without_lower_pose"
+    if source.startswith("tile_") and "full" not in source.split("+"):
+        return "upper_body_tile_without_lower_pose"
+    return None
 
 
 def _best_body_region(
